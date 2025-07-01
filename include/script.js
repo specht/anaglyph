@@ -121,7 +121,7 @@ function parseSceneINI(text) {
 
 
 function preload() {
-    fetch('/scene.ini')
+    fetch('scene.ini')
     .then(response => response.text())
     .then(text => {
         x = parseSceneINI(text);
