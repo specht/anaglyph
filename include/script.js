@@ -1,6 +1,7 @@
 let anaglyph;
 let camera;
 let models = {};
+let tex = {};
 let sceneDescription;
 let enableAnaglyph = true;
 
@@ -129,9 +130,15 @@ function preload() {
         for (let entry of sceneDescription) {
             if (entry.model) {
                 if (!models[entry.model]) {
-                    models[entry.model] = loadModel(entry.model, true);
+                    models[entry.model] = loadModel(entry.model, false);
+                }
+                let kit = entry.model.split('/')[0];
+                let model = entry.model.split('/')[1].split('.')[0];
+                if (!tex[kit]) {
+                    tex[kit] = loadImage(`${kit}/textures/${model}.png`);
                 }
                 entry.model = models[entry.model];
+                entry.tex = tex[kit];
             }
         }
         let errors = x.errors;
@@ -255,6 +262,8 @@ function renderScene(pg) {
                 }
                 if (entry.model) {
                     if (entry.model instanceof p5.Geometry) {
+                        pg.texture(entry.tex);
+                        pg.scale(100, 100, 100);
                         pg.model(entry.model);
                     }
                 }
