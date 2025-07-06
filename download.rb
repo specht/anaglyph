@@ -22,7 +22,7 @@ kit = (ARGV.first || '').to_sym
 if !KITS.has_key?(kit)
     puts "Usage: download.rb <kit name>"
     puts "Available kits: #{KITS.keys.join(', ')}"
-    puts "Example: download.rb industrial"
+    puts "Example: download.rb #{KITS.keys.first}"
     exit 1
 end
 
