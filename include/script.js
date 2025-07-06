@@ -155,8 +155,10 @@ function preload() {
 
 function setup() {
     createCanvas(windowWidth, windowHeight, WEBGL);
+    // perspective(PI / 2, windowWidth / windowHeight, 0.001, 5000);
     anaglyph = createAnaglyph(this);
     camera = new OrbitCamera();
+    // camera = new FlyCamera();
 }
 
 function windowResized() {
