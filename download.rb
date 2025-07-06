@@ -26,9 +26,14 @@ if !KITS.has_key?(kit)
     exit 1
 end
 
+system("mkdir -p .dl")
 system("rm -rf _temp; rm -rf #{kit}; mkdir -p _temp; mkdir -p _temp/unpacked; mkdir -p #{kit}/textures")
-system("wget -O _temp/kit.zip #{KITS[kit]}")
-system("unzip -o _temp/kit.zip -d _temp/unpacked")
+STDERR.puts "Fetching #{kit}..."
+system("wget -q -N --no-if-modified-since -P .dl #{KITS[kit]}")
+STDERR.puts "Unpacking #{kit}..."
+system("unzip -q -o .dl/#{File.basename(KITS[kit])} -d _temp/unpacked")
+
+FileUtils.cp("_temp/unpacked/License.txt", "#{kit}/")
 
 Dir["_temp/unpacked/Models/OBJ format/*.obj"].each do |path|
     s = File.read(path)
@@ -39,8 +44,11 @@ Dir["_temp/unpacked/Models/OBJ format/*.obj"].each do |path|
     if mtl_set.size < 2
         FileUtils.cp(path, "#{kit}/#{File.basename(path)}")
         mtl_set.each do |mtl|
-            FileUtils.cp("_temp/unpacked/Models/OBJ format/Textures/#{mtl}.png", "#{kit}/textures/#{mtl}.png")
-            File.link("#{kit}/textures/#{mtl}.png", "#{kit}/textures/#{File.basename(path).sub('.obj', '.png')}")
+            begin
+                FileUtils.cp("_temp/unpacked/Models/OBJ format/Textures/#{mtl}.png", "#{kit}/textures/#{mtl}.png")
+                File.link("#{kit}/textures/#{mtl}.png", "#{kit}/textures/#{File.basename(path).sub('.obj', '.png')}")
+            rescue
+            end
         end
     end
 end
