@@ -93,7 +93,7 @@ function parseSceneINI(text) {
         }
 
         if (key === 'move' || key === 'rotate' || key === 'scale') {
-            if (typeof(value) === 'string') {
+            if (typeof (value) === 'string') {
                 value = [value, value, value];
             }
             // Store line for this transform
@@ -123,31 +123,34 @@ function parseSceneINI(text) {
 
 function preload() {
     fetch('scene.ini')
-    .then(response => response.text())
-    .then(text => {
-        x = parseSceneINI(text);
-        sceneDescription = x.objects;
-        for (let entry of sceneDescription) {
-            if (entry.model) {
-                if (!models[entry.model]) {
-                    models[entry.model] = loadModel(entry.model, false);
+        .then(response => response.text())
+        .then(text => {
+            x = parseSceneINI(text);
+            sceneDescription = x.objects;
+            for (let entry of sceneDescription) {
+                if (entry.model) {
+                    if (!models[entry.model]) {
+                        let path = entry.model;
+                        if (path.indexOf('.') < 0)
+                            path = path + '.obj';
+                        models[entry.model] = loadModel(path, false);
+                    }
+                    let kit = entry.model.split('/')[0];
+                    let model = entry.model.split('/')[1].split('.')[0];
+                    if (!tex[kit]) {
+                        tex[kit] = loadImage(`${kit}/textures/${model}.png`);
+                    }
+                    entry.model = models[entry.model];
+                    entry.tex = tex[kit];
                 }
-                let kit = entry.model.split('/')[0];
-                let model = entry.model.split('/')[1].split('.')[0];
-                if (!tex[kit]) {
-                    tex[kit] = loadImage(`${kit}/textures/${model}.png`);
-                }
-                entry.model = models[entry.model];
-                entry.tex = tex[kit];
             }
-        }
-        let errors = x.errors;
-        if (errors.length > 0) {
-            document.getElementById('errors').style.display = 'block';
-            document.getElementById('errors').innerHTML = errors.map(e => `<p>${e}</p>`).join('');
-        }
-    })
-    .catch(error => console.error('Fehler in scene.ini!', error));
+            let errors = x.errors;
+            if (errors.length > 0) {
+                document.getElementById('errors').style.display = 'block';
+                document.getElementById('errors').innerHTML = errors.map(e => `<p>${e}</p>`).join('');
+            }
+        })
+        .catch(error => console.error('Fehler in scene.ini!', error));
 };
 
 function setup() {
