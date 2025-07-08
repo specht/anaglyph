@@ -5,22 +5,125 @@ let tex = {};
 let sceneDescription;
 let enableAnaglyph = true;
 
-function parseSceneINI(text) {
-    const objects = [];
-    let current = { transform: [], _lineStart: 1 }; // line where current object starts
+function splitArgs(line) {
+    const args = [];
+    let current = '';
+    let depth = 0;
+    for (let char of line) {
+        if (char === ',' && depth === 0) {
+            args.push(current.trim());
+            current = '';
+        } else {
+            if (char === '(') depth++;
+            if (char === ')') depth--;
+            current += char;
+        }
+    }
+    if (current.trim()) args.push(current.trim());
+    return args;
+}
+
+function unrollLoops(source) {
+    const lines = source.split('\n');
     const errors = [];
+
+    const lineMap = []; // maps unrolled line index -> original source line number
+
+    function expand(lines, parentLineNumber = 0, scope = {}) {
+        let result = [];
+        let localLineMap = [];
+        let i = 0;
+
+        while (i < lines.length) {
+            const rawLine = lines[i];
+            const line = rawLine.trim();
+            const currentLineNumber = parentLineNumber + i;
+
+            const loopMatch = line.match(/^loop\s+(\w+)\s+from\s+(-?\d+)\s+to\s+(-?\d+)(?:\s+step\s+(-?\d+))?/);
+            if (loopMatch) {
+                const [, varName, fromStr, toStr, stepStr] = loopMatch;
+                const from = parseInt(fromStr, 10);
+                const to = parseInt(toStr, 10);
+                const step = stepStr ? parseInt(stepStr, 10) : (to >= from ? 1 : -1);
+                if (step === 0) {
+                    errors.push(`Ungültige Schrittgröße (step) 0 in Zeile ${currentLineNumber + 1}`);
+                    i++;
+                    continue;
+                }
+
+                // Find matching end
+                let body = [];
+                let bodyLineStart = i + 1;
+                i++;
+                let depth = 1;
+                while (i < lines.length && depth > 0) {
+                    const innerLine = lines[i].trim();
+                    if (innerLine.startsWith('loop')) depth++;
+                    else if (innerLine === 'end') depth--;
+                    if (depth > 0) body.push(lines[i]);
+                    i++;
+                }
+
+                if (depth !== 0) {
+                    errors.push(`Fehlendes Schlüsselwort 'end' für die Schleife (loop) ab Zeile ${currentLineNumber + 1}`);
+                    continue;
+                }
+
+                // Unroll loop
+                for (
+                    let val = from;
+                    step > 0 ? val <= to : val >= to;
+                    val += step
+                ) {
+                    const newScope = { ...scope, [varName]: val };
+                    const { expanded, map } = expand(body, parentLineNumber + bodyLineStart, newScope);
+                    result.push(...expanded);
+                    localLineMap.push(...map);
+                }
+            } else if (line === 'end') {
+                errors.push(`Überzähliges Schlüsselwort 'end' in Zeile ${currentLineNumber + 1}`);
+                i++;
+            } else {
+                // Replace vars
+                const substituted = rawLine.replace(/\b\w+\b/g, word =>
+                    scope[word] !== undefined ? scope[word] : word
+                );
+                result.push(substituted);
+                localLineMap.push(currentLineNumber + 1); // 1-based line number
+                i++;
+            }
+        }
+
+        return { expanded: result, map: localLineMap };
+    }
+
+    const { expanded, map } = expand(lines);
+    return {
+        output: expanded.join('\n'),
+        errors,
+        lineMap: map
+    };
+}
+
+function parseSceneINI(text) {
+    let errors = [];
+
+    let temp = unrollLoops(text);
+    text = temp.output;
+    errors = temp.errors;
+    const lineMap = temp.lineMap;
+    const objects = [];
+    let current = { transform: [], _lineStart: 1 };
 
     const lines = text.split(/\r?\n/);
 
     lines.forEach((line, index) => {
-        const lineNumber = index + 1;
+        const lineNumber = lineMap?.[index] ?? (index + 1);
         let trimmed = line.trim();
 
-        // Skip comments and empty lines handling
         if (trimmed.startsWith('#') || trimmed.startsWith(';')) return;
 
         if (!trimmed) {
-            // New object block if current has content
             if (Object.keys(current).length > 2 || current.transform.length > 0) {
                 objects.push(current);
                 current = { transform: [], _lineStart: lineNumber + 1 };
@@ -34,7 +137,6 @@ function parseSceneINI(text) {
             trimmed = line.trim();
         }
 
-        // Parse key and value
         const [keyRaw, ...rest] = trimmed.split('=');
         if (!keyRaw || rest.length === 0) {
             errors.push(`Syntaxfehler in Zeile ${lineNumber}: fehlendes '='`);
@@ -44,10 +146,9 @@ function parseSceneINI(text) {
         const key = keyRaw.trim();
         const rawValue = rest.join('=').trim();
 
-        // Parse arrays for move, rotate, scale
-        let value = rawValue.includes(',') ? rawValue.split(',').map(s => s.trim()) : rawValue;
+        let value = splitArgs(rawValue);
+        if (value.length === 1) value = value[0];
 
-        // Validate known keys or provide helpful messages:
         let t = 0.0;
         if (key === 'shape') {
             if (value !== 'box' && value !== 'torus' && value !== 'cone' && value !== 'cylinder' && value !== 'sphere' && value !== 'plane' && value !== 'grid') {
@@ -96,21 +197,17 @@ function parseSceneINI(text) {
             if (typeof (value) === 'string') {
                 value = [value, value, value];
             }
-            // Store line for this transform
             current.transform.push({ type: key, value, _line: lineNumber });
         } else {
-            // Store value and line
             current[key] = value;
             current[`_${key}_line`] = lineNumber;
         }
     });
 
-    // Push last object if exists
     if (Object.keys(current).length > 1 || current.transform.length > 0) {
         objects.push(current);
     }
 
-    // Reverse transform order for each object
     objects.forEach(obj => {
         obj.transform ??= [];
         obj.transform.reverse();
@@ -119,38 +216,36 @@ function parseSceneINI(text) {
     return { objects, errors };
 }
 
-
-
 function preload() {
     fetch('scene.ini')
-        .then(response => response.text())
-        .then(text => {
-            x = parseSceneINI(text);
-            sceneDescription = x.objects;
-            for (let entry of sceneDescription) {
-                if (entry.model) {
-                    if (!models[entry.model]) {
-                        let path = entry.model;
-                        if (path.indexOf('.') < 0)
-                            path = path + '.obj';
-                        models[entry.model] = loadModel(path, false);
-                    }
-                    let kit = entry.model.split('/')[0];
-                    let model = entry.model.split('/')[1].split('.')[0];
-                    if (!tex[kit]) {
-                        tex[kit] = loadImage(`${kit}/textures/${model}.png`);
-                    }
-                    entry.model = models[entry.model];
-                    entry.tex = tex[kit];
+    .then(response => response.text())
+    .then(text => {
+        x = parseSceneINI(text);
+        sceneDescription = x.objects;
+        for (let entry of sceneDescription) {
+            if (entry.model) {
+                if (!models[entry.model]) {
+                    let path = entry.model;
+                    if (path.indexOf('.') < 0)
+                        path = path + '.obj';
+                    models[entry.model] = loadModel(path, false);
                 }
+                let kit = entry.model.split('/')[0];
+                let model = entry.model.split('/')[1].split('.')[0];
+                if (!tex[kit]) {
+                    tex[kit] = loadImage(`${kit}/textures/${model}.png`);
+                }
+                entry.model = models[entry.model];
+                entry.tex = tex[kit];
             }
-            let errors = x.errors;
-            if (errors.length > 0) {
-                document.getElementById('errors').style.display = 'block';
-                document.getElementById('errors').innerHTML = errors.map(e => `<p>${e}</p>`).join('');
-            }
-        })
-        .catch(error => console.error('Fehler in scene.ini!', error));
+        }
+        let errors = x.errors;
+        if (errors.length > 0) {
+            document.getElementById('errors').style.display = 'block';
+            document.getElementById('errors').innerHTML = errors.map(e => `<p>${e}</p>`).join('');
+        }
+    })
+    .catch(error => console.error('Fehler in scene.ini!', error));
 };
 
 function setup() {
@@ -182,6 +277,7 @@ function drawGrid(pg) {
 
 function scene(pg) {
     camera.apply(pg);
+    // pg.scale(1, -1, 1);
     renderScene(pg);
 }
 

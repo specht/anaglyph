@@ -9,17 +9,18 @@ body {
     top: 0;
     left: 0;
     right: 0;
-    margin: 2em;
+    margin: 1em;
     border: 1px solid #a00;
-    border-radius: 1em;
-    padding: 1em;
+    border-radius: 0.25em;
+    padding: 0.5em 1em;
     color: #222;
     box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
     font-family: sans-serif;
     font-size: 16px;
-    padding: 20px;
     overflow-y: auto;
     display: none;
+    background-color: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(1em);
 }
 
 p {
