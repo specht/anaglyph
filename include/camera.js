@@ -31,11 +31,13 @@ class OrbitCamera {
 
         // To track touches and gestures
         this.touchData = {
-            prevTouches: [],
             isRotating: false,
             isPanning: false,
             initialPinchDistance: 0,
             initialDistance: this.targetDistance,
+            startX: 0,
+            startY: 0,
+            moved: false,
         };
 
         this.restoreCameraStateFromBase64();
@@ -114,78 +116,88 @@ class OrbitCamera {
     }
 
     onTouchStart(e) {
-        e.preventDefault();
         const touches = e.touches;
-        this.touchData.prevTouches = Array.from(touches);
+        this.touchData.startX = touches[0].clientX;
+        this.touchData.startY = touches[0].clientY;
+        this.touchData.moved = false;
 
         if (touches.length === 1) {
-            // Start rotating
             this.touchData.isRotating = true;
             this.lastTouchX = touches[0].clientX;
             this.lastTouchY = touches[0].clientY;
         } else if (touches.length === 2) {
-            // Start panning + zooming
             this.touchData.isRotating = false;
             this.touchData.isPanning = true;
             this.touchData.initialPinchDistance = this.getPinchDistance(touches);
             this.touchData.initialDistance = this.targetDistance;
-            // Store last midpoint for panning
             this.touchData.lastMidX = (touches[0].clientX + touches[1].clientX) / 2;
             this.touchData.lastMidY = (touches[0].clientY + touches[1].clientY) / 2;
         }
     }
 
     onTouchMove(e) {
-        e.preventDefault();
         const touches = e.touches;
+        const moveThreshold = 5; // pixels
 
         if (this.touchData.isRotating && touches.length === 1) {
             const dx = touches[0].clientX - this.lastTouchX;
             const dy = touches[0].clientY - this.lastTouchY;
+
+            // Mark moved if over threshold
+            if (Math.abs(dx) > moveThreshold || Math.abs(dy) > moveThreshold) {
+                this.touchData.moved = true;
+            }
+
             this.lastTouchX = touches[0].clientX;
             this.lastTouchY = touches[0].clientY;
 
-            this.targetRotationY += dx * this.sensitivity;
-            this.targetRotationX += dy * this.sensitivity;
-            this.targetRotationX = Math.min(Math.max(this.targetRotationX, -Math.PI / 2 + 0.1), Math.PI / 2 - 0.1);
+            if (this.touchData.moved) {
+                e.preventDefault();  // only prevent default if dragging
+                this.targetRotationY += dx * this.sensitivity;
+                this.targetRotationX += dy * this.sensitivity;
+                this.targetRotationX = Math.min(Math.max(this.targetRotationX, -Math.PI / 2 + 0.1), Math.PI / 2 - 0.1);
+            }
         } else if (this.touchData.isPanning && touches.length === 2) {
-            // Zoom by pinch
             const newPinchDistance = this.getPinchDistance(touches);
             const pinchDelta = newPinchDistance - this.touchData.initialPinchDistance;
-            this.targetDistance = this.touchData.initialDistance - pinchDelta * 0.5;
-            this.targetDistance = Math.min(Math.max(this.targetDistance, this.minDistance), this.maxDistance);
 
-            // Pan by midpoint movement
+            if (Math.abs(pinchDelta) > moveThreshold) {
+                this.touchData.moved = true;
+            }
+
             const midX = (touches[0].clientX + touches[1].clientX) / 2;
             const midY = (touches[0].clientY + touches[1].clientY) / 2;
             const dx = midX - this.touchData.lastMidX;
             const dy = midY - this.touchData.lastMidY;
 
-            // Pan: move center by dx, dy in screen space mapped to world space
-            let right = this.getRotatedRightVector();
-            let up = this.getRotatedUpVector();
-            this.targetCenter.add(p5.Vector.mult(right, -dx));
-            this.targetCenter.add(p5.Vector.mult(up, dy));
+            if (Math.abs(dx) > moveThreshold || Math.abs(dy) > moveThreshold || Math.abs(pinchDelta) > moveThreshold) {
+                this.touchData.moved = true;
+            }
 
-            this.touchData.lastMidX = midX;
-            this.touchData.lastMidY = midY;
+            if (this.touchData.moved) {
+                e.preventDefault();  // only prevent default if dragging or zooming
+
+                this.targetDistance = this.touchData.initialDistance - pinchDelta * 0.5;
+                this.targetDistance = Math.min(Math.max(this.targetDistance, this.minDistance), this.maxDistance);
+
+                let right = this.getRotatedRightVector();
+                let up = this.getRotatedUpVector();
+                this.targetCenter.add(p5.Vector.mult(right, -dx));
+                this.targetCenter.add(p5.Vector.mult(up, dy));
+
+                this.touchData.lastMidX = midX;
+                this.touchData.lastMidY = midY;
+            }
         }
     }
 
     onTouchEnd(e) {
-        e.preventDefault();
-        if (e.touches.length === 0) {
-            // All touches ended
-            this.touchData.isRotating = false;
-            this.touchData.isPanning = false;
+        if (this.touchData.moved) {
             this.updateCameraHashThrottled();
-        } else if (e.touches.length === 1) {
-            // If one finger remains, switch to rotating
-            this.touchData.isRotating = true;
-            this.touchData.isPanning = false;
-            this.lastTouchX = e.touches[0].clientX;
-            this.lastTouchY = e.touches[0].clientY;
         }
+        this.touchData.isRotating = false;
+        this.touchData.isPanning = false;
+        this.touchData.moved = false;
     }
 
     getRotatedUpVector() {
