@@ -177,7 +177,11 @@ function parseSceneINI(text) {
         if (key === 'fill') {
             if (value !== 'off') {
                 try {
-                    eval(value);
+                    try {
+                        eval(value);
+                    } catch(e) {
+                        if (!isValidColor(value)) throw "nope";
+                    }
                 } catch (e) {
                     errors.push(`Ungültiger Wert für Füllfarbe (fill) in Zeile ${lineNumber}: "${value}".`);
                 }
@@ -186,7 +190,11 @@ function parseSceneINI(text) {
         if (key === 'stroke') {
             if (value !== 'off') {
                 try {
-                    eval(value);
+                    try {
+                        eval(value);
+                    } catch(e) {
+                        if (!isValidColor(value)) throw "nope";
+                    }
                 } catch (e) {
                     errors.push(`Ungültiger Wert für Strichfarbe (stroke) in Zeile ${lineNumber}: "${value}".`);
                 }
@@ -300,7 +308,11 @@ function renderScene(pg) {
                 if (entry.stroke === 'off') {
                     pg.noStroke();
                 } else {
-                    pg.stroke(eval(entry.stroke) * 255);
+                    try {
+                        pg.stroke(eval(entry.stroke) * 255);
+                    } catch (e) {
+                        pg.stroke(entry.stroke);
+                    }
                 }
             }
             if (entry.fill) {
@@ -312,7 +324,11 @@ function renderScene(pg) {
                     pg.directionalLight(255, 255, 255, 0.5, 0.5, -1);
                     pg.fill(255);
                 } else {
-                    pg.fill(eval(entry.fill) * 255);
+                    try {
+                        pg.fill(eval(entry.fill) * 255);
+                    } catch (e) {
+                        pg.fill(entry.fill);
+                    }
                 }
             }
             if (entry.shade) {
@@ -326,12 +342,7 @@ function renderScene(pg) {
             }
             if (entry.anaglyph) {
                 enableAnaglyph = (entry.anaglyph === 'on');
-                if (enableAnaglyph) {
-                    anaglyph.shaderLoaded = true;
-                } else {
-                    anaglyph.shaderLoaded = false;
-                    // pg.scale(1, -1, 1); // flip y-axis for non-anaglyph mode
-                }
+                anaglyph.shaderLoaded = enableAnaglyph;
             }
             if (entry.shape || entry.model) {
                 pg.push();
@@ -374,3 +385,16 @@ function renderScene(pg) {
         }
     }
 }
+
+function isValidColor(str) {
+    const s = new Option().style;
+    s.color = str;
+    return s.color !== '';
+}
+
+window.addEventListener('DOMContentLoaded', function(e) {
+    document.querySelector('#bu-anaglyph').addEventListener('click', function(e) {
+        enableAnaglyph = !enableAnaglyph;
+        anaglyph.shaderLoaded = enableAnaglyph;
+    });
+});

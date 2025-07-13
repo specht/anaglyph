@@ -2,24 +2,82 @@ class OrbitCamera {
     constructor() {
         this.minDistance = -700;
         this.maxDistance = 2000;
-        this.rotationX = this.targetRotationX = radians(20); // tilt down
-        this.rotationY = this.targetRotationY = radians(20);  // rotate around target
-        this.distance = -300;
+        this.reset();
+        this.rotationX = this.targetRotationX;
+        this.rotationY = this.targetRotationY;
+        this.center = this.targetCenter.copy();
+        this.distance = this.targetDistance;
 
         this.sensitivity = 0.005;
         this.zoomSensitivity = 20;
 
+        this.shiftPressed = false;
         this.isDragging = false;
         this.lastMouseX = 0;
         this.lastMouseY = 0;
-
-        this.targetDistance = this.distance;
+        this.hashUpdateTimeout = null;
 
         // Bind event handlers
         window.addEventListener('mousedown', (e) => this.onMouseDown(e));
         window.addEventListener('mouseup', () => this.onMouseUp());
         window.addEventListener('mousemove', (e) => this.onMouseMove(e));
         window.addEventListener('wheel', (e) => this.onWheel(e), { passive: true });
+        window.addEventListener('keydown', (e) => this.onKeyDown(e));
+        window.addEventListener('keyup', (e) => this.onKeyUp(e));
+
+        this.restoreCameraStateFromBase64();
+        let self = this;
+        document.querySelector('#bu-reset').addEventListener('click', function(e) {
+            self.reset();
+        });
+    }
+
+    reset() {
+        this.rotationX = this.rotationX % (Math.PI * 2.0);
+        this.rotationY = this.rotationY % (Math.PI * 2.0);
+        this.targetRotationX = radians(20);
+        this.targetRotationY = radians(20);
+        this.targetDistance = -300;
+        this.targetCenter = createVector(0, 0, 0);
+    }
+
+    restoreCameraStateFromBase64() {
+        if (!location.hash) return;
+        try {
+            const base64 = location.hash.substring(1);
+            const json = decodeURIComponent(atob(base64));
+            const state = JSON.parse(json);
+            if (state.length === 6) {
+                this.rotationX = state[0];
+                this.rotationY = state[1];
+                this.distance = state[2];
+                this.targetRotationX = this.rotationX;
+                this.targetRotationY = this.rotationY;
+                this.targetDistance = this.distance;
+                this.center.x = state[3];
+                this.center.y = state[4];
+                this.center.z = state[5];
+            }
+        } catch (e) {
+            console.warn("Failed to restore camera state from hash:", e);
+        }
+    }
+
+    updateCameraHashThrottled() {
+        clearTimeout(this.hashUpdateTimeout);
+        this.hashUpdateTimeout = setTimeout(() => {
+            let json = this.getCameraStateJSON();
+            let base64 = btoa(json);
+            location.hash = base64;
+        }, 300);
+    }
+
+    onKeyDown(e) {
+        if (e.key === 'Shift') this.shiftPressed = true;
+    }
+
+    onKeyUp(e) {
+        if (e.key === 'Shift') this.shiftPressed = false;
     }
 
     onMouseDown(e) {
@@ -30,45 +88,124 @@ class OrbitCamera {
 
     onMouseUp() {
         this.isDragging = false;
+        this.updateCameraHashThrottled();
+    }
+
+    getRotatedUpVector() {
+        let up = createVector(0, 1, 0);
+
+        let sinX = Math.sin(-this.rotationX);
+        let cosX = Math.cos(-this.rotationX);
+        let y1 = up.y * cosX - up.z * sinX;
+        let z1 = up.y * sinX + up.z * cosX;
+        up.y = y1;
+        up.z = z1;
+
+        let sinY = Math.sin(-this.rotationY);
+        let cosY = Math.cos(-this.rotationY);
+        let x1 = up.x * cosY + up.z * sinY;
+        let z2 = -up.x * sinY + up.z * cosY;
+        up.x = x1;
+        up.z = z2;
+
+        return up;
+    }
+
+    getRotatedRightVector() {
+        let right = createVector(1, 0, 0);
+
+        let sinX = Math.sin(-this.rotationX);
+        let cosX = Math.cos(-this.rotationX);
+        let y1 = right.y * cosX - right.z * sinX;
+        let z1 = right.y * sinX + right.z * cosX;
+        right.y = y1;
+        right.z = z1;
+
+        let sinY = Math.sin(-this.rotationY);
+        let cosY = Math.cos(-this.rotationY);
+        let x1 = right.x * cosY + right.z * sinY;
+        let z2 = -right.x * sinY + right.z * cosY;
+        right.x = x1;
+        right.z = z2;
+
+        return right;
+    }
+
+    printVector(v) {
+        let x = 0.0 + v.x;
+        let y = 0.0 + v.y;
+        let z = 0.0 + v.z;
+        console.log(`${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}`)
     }
 
     onMouseMove(e) {
         if (!this.isDragging) return;
         const dx = e.clientX - this.lastMouseX;
         const dy = e.clientY - this.lastMouseY;
-
-        this.targetRotationY += dx * this.sensitivity;
-        this.targetRotationX += dy * this.sensitivity;
-
-        // Clamp vertical rotation to avoid flipping
-        this.targetRotationX = Math.min(Math.max(this.targetRotationX, -Math.PI / 2 + 0.1), Math.PI / 2 - 0.1);
-
         this.lastMouseX = e.clientX;
         this.lastMouseY = e.clientY;
+
+        if (this.shiftPressed) {
+            let right = this.getRotatedRightVector();
+            this.targetCenter.add(p5.Vector.mult(right, -dx));
+            this.targetCenter.add(p5.Vector.mult(this.getRotatedUpVector(), dy));
+        } else {
+            this.targetRotationY += dx * this.sensitivity;
+            this.targetRotationX += dy * this.sensitivity;
+            this.targetRotationX = Math.min(Math.max(this.targetRotationX, -Math.PI / 2 + 0.1), Math.PI / 2 - 0.1);
+        }
     }
+
+    getCameraStateJSON() {
+        const state = [
+            this.rotationX,
+            this.rotationY,
+            this.distance,
+            this.center.x,
+            this.center.y,
+            this.center.z,
+        ];
+
+        function roundValues(obj) {
+            if (typeof obj === 'number') {
+                return Number(obj.toFixed(2));
+            } else if (typeof obj === 'object') {
+                for (let key in obj) {
+                    obj[key] = roundValues(obj[key]);
+                }
+                return obj;
+            }
+            return obj;
+        }
+
+        return JSON.stringify(roundValues(state));
+    }
+
 
     onWheel(e) {
         this.targetDistance += e.deltaY * this.zoomSensitivity * 0.01;
         this.targetDistance = Math.min(Math.max(this.targetDistance, this.minDistance), this.maxDistance);
+        this.updateCameraHashThrottled();
     }
 
     update() {
-        // Smooth interpolation for rotation and zoom
         const lerpFactor = 0.1;
         this.rotationX += (this.targetRotationX - this.rotationX) * lerpFactor;
         this.rotationY += (this.targetRotationY - this.rotationY) * lerpFactor;
         this.distance += (this.targetDistance - this.distance) * lerpFactor;
+        this.center.x += (this.targetCenter.x - this.center.x) * lerpFactor;
+        this.center.y += (this.targetCenter.y - this.center.y) * lerpFactor;
+        this.center.z += (this.targetCenter.z - this.center.z) * lerpFactor;
     }
 
     apply(pg) {
         this.update();
 
         pg.scale(1, -1, 1);
-        // Translate back by distance
         pg.translate(0, 0, -this.distance);
-        // Apply rotations
         pg.rotateX(this.rotationX);
         pg.rotateY(this.rotationY);
+        pg.translate(-this.center.x, -this.center.y, -this.center.z);
     }
 }
 
