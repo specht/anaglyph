@@ -4,6 +4,7 @@ let models = {};
 let tex = {};
 let sceneDescription;
 let enableAnaglyph = true;
+let firstFrame = true;
 
 function splitArgs(line) {
     const args = [];
@@ -341,8 +342,10 @@ function renderScene(pg) {
                 }
             }
             if (entry.anaglyph) {
-                enableAnaglyph = (entry.anaglyph === 'on');
-                anaglyph.shaderLoaded = enableAnaglyph;
+                if (firstFrame) {
+                    enableAnaglyph = (entry.anaglyph === 'on');
+                    anaglyph.shaderLoaded = enableAnaglyph;
+                }
             }
             if (entry.shape || entry.model) {
                 pg.push();
@@ -384,6 +387,7 @@ function renderScene(pg) {
         } catch (error) {
         }
     }
+    firstFrame = false;
 }
 
 function isValidColor(str) {
