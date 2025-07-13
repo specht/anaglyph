@@ -51,12 +51,13 @@ class OrbitCamera {
                 this.rotationX = state[0];
                 this.rotationY = state[1];
                 this.distance = state[2];
-                this.targetRotationX = this.rotationX;
-                this.targetRotationY = this.rotationY;
-                this.targetDistance = this.distance;
                 this.center.x = state[3];
                 this.center.y = state[4];
                 this.center.z = state[5];
+                this.targetRotationX = this.rotationX;
+                this.targetRotationY = this.rotationY;
+                this.targetDistance = this.distance;
+                this.targetCenter = this.center.copy();
             }
         } catch (e) {
             console.warn("Failed to restore camera state from hash:", e);
