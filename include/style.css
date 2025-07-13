@@ -1,6 +1,11 @@
 html, body {
     margin: 0;
     overflow: hidden;
+    touch-action: none;       /* Disable all default touch gestures */
+    overscroll-behavior: none; /* Prevent scroll chaining */
+    -webkit-user-select: none; /* Disable text selection on mobile */
+    user-select: none;
+    -webkit-touch-callout: none; /* Disable callouts on iOS */
 }
 
 body {
