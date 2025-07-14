@@ -4,6 +4,7 @@ let models = {};
 let tex = {};
 let sceneDescription;
 let enableAnaglyph = true;
+let enableAxes = false;
 let firstFrame = true;
 
 function preprocessSceneINI(source) {
@@ -331,6 +332,8 @@ function setup() {
     anaglyph = createAnaglyph(this);
     camera = new OrbitCamera();
     // camera = new FlyCamera();
+    window.anaglyph_fonts = {};
+    window.anaglyph_fonts.OpenSans = loadFont('include/OpenSans-Regular.ttf');
 }
 
 function windowResized() {
@@ -357,8 +360,54 @@ function scene(pg) {
     renderScene(pg);
 }
 
+function drawAxes(pg) {
+    pg.push();
+    pg.fill(0);
+    pg.textFont(window.anaglyph_fonts.OpenSans, 10);
+
+    pg.push();
+    pg.strokeWeight(5);
+    pg.stroke('#d5291a');
+    pg.line(0, 0, 0, 100, 0, 0);
+    pg.translate(110, 0, 0);
+    pg.rotateY(-camera.rotationY);
+    pg.rotateX(-camera.rotationX);
+    pg.scale(1, -1, 1);
+    pg.text("x", -3, 3)
+    pg.pop();
+
+    pg.push();
+    pg.strokeWeight(5);
+    pg.stroke('#4aa03f');
+    pg.line(0, 0, 0, 0, 100, 0);
+    pg.translate(0, 110, 0);
+    pg.rotateY(-camera.rotationY);
+    pg.rotateX(-camera.rotationX);
+    pg.scale(1, -1, 1);
+    pg.text("y", -3, 3)
+    pg.pop();
+
+    pg.push();
+    pg.strokeWeight(5);
+    pg.stroke('#0d60ae');
+    pg.line(0, 0, 0, 0, 0, 100);
+    pg.translate(0, 0, 110);
+    pg.rotateY(-camera.rotationY);
+    pg.rotateX(-camera.rotationX);
+    pg.scale(1, -1, 1);
+    pg.text("z", -3, 3)
+    pg.pop();
+
+    pg.pop();
+}
+
 function renderScene(pg) {
     pg.background(255);
+
+    if (enableAxes) {
+        drawAxes(pg);
+    }
+
     pg.strokeWeight(2);
     pg.stroke(0);
     pg.fill(255);
@@ -484,5 +533,8 @@ window.addEventListener('DOMContentLoaded', function(e) {
     document.querySelector('#bu-anaglyph').addEventListener('click', function(e) {
         enableAnaglyph = !enableAnaglyph;
         anaglyph.shaderLoaded = enableAnaglyph;
+    });
+    document.querySelector('#bu-axes').addEventListener('click', function(e) {
+        enableAxes = !enableAxes;
     });
 });
