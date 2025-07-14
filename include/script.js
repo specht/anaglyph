@@ -123,9 +123,10 @@ function parseSceneINI(text) {
         let trimmed = line.trim();
 
         if (trimmed.startsWith('#') || trimmed.startsWith(';')) return;
+        console.log(lineNumber, trimmed);
 
         if (!trimmed) {
-            if (Object.keys(current).length > 2 || current.transform.length > 0) {
+            if ((Object.keys(current).length > 2 || current.transform.length > 0) && current.command !== 'push') {
                 objects.push(current);
                 current = { transform: [], _lineStart: lineNumber + 1 };
             }
@@ -139,9 +140,11 @@ function parseSceneINI(text) {
         }
 
         const [keyRaw, ...rest] = trimmed.split('=');
-        if (!keyRaw || rest.length === 0) {
-            errors.push(`Syntaxfehler in Zeile ${lineNumber}: fehlendes '='`);
-            return;
+        if (keyRaw !== 'push' && keyRaw !== 'pop') {
+            if (!keyRaw || rest.length === 0) {
+                errors.push(`Syntaxfehler in Zeile ${lineNumber}: fehlendes '='`);
+                return;
+            }
         }
 
         const key = keyRaw.trim();
@@ -155,7 +158,7 @@ function parseSceneINI(text) {
             if (value !== 'box' && value !== 'torus' && value !== 'cone' && value !== 'cylinder' && value !== 'sphere' && value !== 'plane' && value !== 'grid') {
                 errors.push(`Ungültige Form (shape) in Zeile ${lineNumber}: "${value}". Gültige Werte sind: box, torus, cone, cylinder, sphere, plane, grid.`);
             }
-            if (Object.keys(current).length > 2 || current.transform.length > 0) {
+            if ((Object.keys(current).length > 2 || current.transform.length > 0)) {
                 objects.push(current);
                 current = { transform: [], _lineStart: lineNumber + 1 };
             }
@@ -220,6 +223,7 @@ function parseSceneINI(text) {
     objects.forEach(obj => {
         obj.transform ??= [];
         obj.transform.reverse();
+        console.log(obj);
     });
 
     return { objects, errors };
@@ -259,7 +263,6 @@ function preload() {
 
 function setup() {
     createCanvas(windowWidth, windowHeight, WEBGL);
-    // perspective(PI / 2, windowWidth / windowHeight, 0.001, 5000);
     anaglyph = createAnaglyph(this);
     camera = new OrbitCamera();
     // camera = new FlyCamera();
@@ -286,7 +289,6 @@ function drawGrid(pg) {
 
 function scene(pg) {
     camera.apply(pg);
-    // pg.scale(1, -1, 1);
     renderScene(pg);
 }
 
@@ -298,6 +300,23 @@ function renderScene(pg) {
     let t = millis() / 1000;
     for (let entry of sceneDescription) {
         try {
+            if (entry.command === 'push') {
+                pg.push();
+                for (let tr of entry.transform ?? []) {
+                    if (tr.type === 'move') {
+                        pg.translate(eval(tr.value[0]), eval(tr.value[1]), eval(tr.value[2]));
+                    } else if (tr.type === 'rotate') {
+                        pg.rotateX(eval(tr.value[0]) / 180 * Math.PI);
+                        pg.rotateY(eval(tr.value[1]) / 180 * Math.PI);
+                        pg.rotateZ(eval(tr.value[2]) / 180 * Math.PI);
+                    } else if (tr.type === 'scale') {
+                        pg.scale(eval(tr.value[0]), eval(tr.value[1]), eval(tr.value[2]));
+                    }
+                }
+            }
+            if (entry.command === 'pop') {
+                pg.pop();
+            }
             if (entry.background) {
                 pg.background(eval(entry.background) * 255);
                 continue;
