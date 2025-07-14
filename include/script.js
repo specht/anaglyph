@@ -6,6 +6,110 @@ let sceneDescription;
 let enableAnaglyph = true;
 let firstFrame = true;
 
+function preprocessSceneINI(source) {
+    const errors = [];
+    const lineMap = []; // maps expanded line index -> original line number (1-based)
+
+    function expand(lines, parentLine = 0, scope = {}) {
+        const result = [];
+        const map = [];
+        let i = 0;
+        const stack = [];
+
+        while (i < lines.length) {
+            const rawLine = lines[i];
+            const trimmed = rawLine.trim();
+            const lineNumber = parentLine + i;
+
+            const loopMatch = trimmed.match(/^loop\s+(\w+)\s+from\s+(-?\d+)\s+to\s+(-?\d+)(?:\s+step\s+(-?\d+))?/);
+            if (loopMatch) {
+                const [, varName, fromStr, toStr, stepStr] = loopMatch;
+                const from = parseInt(fromStr, 10);
+                const to = parseInt(toStr, 10);
+                const step = stepStr ? parseInt(stepStr, 10) : (to >= from ? 1 : -1);
+                if (step === 0) {
+                    errors.push(`Ungültige Schrittgröße (step) 0 in Zeile ${lineNumber + 1}`);
+                    i++;
+                    continue;
+                }
+
+                let body = [];
+                let depth = 1;
+                let startLine = i + 1;
+                i++;
+
+                while (i < lines.length && depth > 0) {
+                    const innerLine = lines[i].trim();
+                    if (innerLine.startsWith('loop') || innerLine.startsWith('group')) depth++;
+                    else if (innerLine === 'end') depth--;
+                    if (depth > 0) body.push(lines[i]);
+                    i++;
+                }
+
+                if (depth !== 0) {
+                    errors.push(`Fehlendes Schlüsselwort 'end' für Schleife (loop) ab Zeile ${lineNumber + 1}`);
+                    continue;
+                }
+
+                for (let val = from; step > 0 ? val <= to : val >= to; val += step) {
+                    const newScope = { ...scope, [varName]: val };
+                    const { expanded, map: innerMap } = expand(body, parentLine + startLine, newScope);
+                    result.push(...expanded);
+                    map.push(...innerMap);
+                }
+                continue;
+            }
+
+            if (trimmed === 'group') {
+                const indent = rawLine.match(/^\s*/)?.[0] ?? '';
+                result.push(`${indent}command = push`);
+                map.push(lineNumber + 1);
+                stack.push(lineNumber + 1); // track for error reporting
+                i++;
+                continue;
+            }
+
+            if (trimmed === 'end') {
+                const indent = rawLine.match(/^\s*/)?.[0] ?? '';
+                if (stack.length === 0) {
+                    errors.push(`Überzähliges Schlüsselwort 'end' in Zeile ${lineNumber + 1}`);
+                    result.push(rawLine); // preserve for better debugging
+                } else {
+                    stack.pop();
+                    result.push(`${indent}command = pop`);
+                }
+                map.push(lineNumber + 1);
+                i++;
+                continue;
+            }
+
+            // Substitute loop variables
+            const substituted = rawLine.replace(/\b\w+\b/g, word =>
+                scope[word] !== undefined ? scope[word] : word
+            );
+            result.push(substituted);
+            map.push(lineNumber + 1);
+            i++;
+        }
+
+        if (stack.length > 0) {
+            for (const lineStart of stack) {
+                errors.push(`Fehlendes Schlüsselwirt 'end' für Gruppe (group) ab Zeile ${lineStart}`);
+            }
+        }
+
+        return { expanded: result, map };
+    }
+
+    const lines = source.split(/\r?\n/);
+    const { expanded, map } = expand(lines);
+    return {
+        output: expanded.join('\n'),
+        errors,
+        lineMap: map
+    };
+}
+
 function splitArgs(line) {
     const args = [];
     let current = '';
@@ -24,95 +128,54 @@ function splitArgs(line) {
     return args;
 }
 
-function unrollLoops(source) {
-    const lines = source.split('\n');
-    const errors = [];
+function replaceGroupsWithPushPop(text) {
+    const lines = text.split(/\r?\n/);
+    const stack = [];
+    const output = [];
+    let errors = [];
 
-    const lineMap = []; // maps unrolled line index -> original source line number
+    for (let i = 0; i < lines.length; i++) {
+        const originalLine = lines[i];
+        const trimmed = originalLine.trim();
 
-    function expand(lines, parentLineNumber = 0, scope = {}) {
-        let result = [];
-        let localLineMap = [];
-        let i = 0;
-
-        while (i < lines.length) {
-            const rawLine = lines[i];
-            const line = rawLine.trim();
-            const currentLineNumber = parentLineNumber + i;
-
-            const loopMatch = line.match(/^loop\s+(\w+)\s+from\s+(-?\d+)\s+to\s+(-?\d+)(?:\s+step\s+(-?\d+))?/);
-            if (loopMatch) {
-                const [, varName, fromStr, toStr, stepStr] = loopMatch;
-                const from = parseInt(fromStr, 10);
-                const to = parseInt(toStr, 10);
-                const step = stepStr ? parseInt(stepStr, 10) : (to >= from ? 1 : -1);
-                if (step === 0) {
-                    errors.push(`Ungültige Schrittgröße (step) 0 in Zeile ${currentLineNumber + 1}`);
-                    i++;
-                    continue;
-                }
-
-                // Find matching end
-                let body = [];
-                let bodyLineStart = i + 1;
-                i++;
-                let depth = 1;
-                while (i < lines.length && depth > 0) {
-                    const innerLine = lines[i].trim();
-                    if (innerLine.startsWith('loop')) depth++;
-                    else if (innerLine === 'end') depth--;
-                    if (depth > 0) body.push(lines[i]);
-                    i++;
-                }
-
-                if (depth !== 0) {
-                    errors.push(`Fehlendes Schlüsselwort 'end' für die Schleife (loop) ab Zeile ${currentLineNumber + 1}`);
-                    continue;
-                }
-
-                // Unroll loop
-                for (
-                    let val = from;
-                    step > 0 ? val <= to : val >= to;
-                    val += step
-                ) {
-                    const newScope = { ...scope, [varName]: val };
-                    const { expanded, map } = expand(body, parentLineNumber + bodyLineStart, newScope);
-                    result.push(...expanded);
-                    localLineMap.push(...map);
-                }
-            } else if (line === 'end') {
-                errors.push(`Überzähliges Schlüsselwort 'end' in Zeile ${currentLineNumber + 1}`);
-                i++;
+        if (trimmed === 'group') {
+            stack.push(i);
+            const indent = originalLine.match(/^\s*/)[0] ?? '';
+            output.push(`${indent}command = push`);
+        } else if (trimmed === 'end') {
+            if (stack.length === 0) {
+                errors.push(`Überzähliges Schlüsselwort 'end' in Zeile ${i + 1}`);
+                output.push(originalLine); // keep original
             } else {
-                // Replace vars
-                const substituted = rawLine.replace(/\b\w+\b/g, word =>
-                    scope[word] !== undefined ? scope[word] : word
-                );
-                result.push(substituted);
-                localLineMap.push(currentLineNumber + 1); // 1-based line number
-                i++;
+                stack.pop();
+                const indent = originalLine.match(/^\s*/)[0] ?? '';
+                output.push(`${indent}command = pop`);
             }
+        } else {
+            output.push(originalLine);
         }
-
-        return { expanded: result, map: localLineMap };
     }
 
-    const { expanded, map } = expand(lines);
+    if (stack.length > 0) {
+        for (const lineIndex of stack) {
+            errors.push(`Unclosed 'group' starting at line ${lineIndex + 1}`);
+        }
+    }
+
     return {
-        output: expanded.join('\n'),
-        errors,
-        lineMap: map
+        output: output.join('\n'),
+        errors
     };
 }
 
 function parseSceneINI(text) {
     let errors = [];
 
-    let temp = unrollLoops(text);
+    let temp = preprocessSceneINI(text);
     text = temp.output;
     errors = temp.errors;
     const lineMap = temp.lineMap;
+
     const objects = [];
     let current = { transform: [], _lineStart: 1 };
 
@@ -125,7 +188,7 @@ function parseSceneINI(text) {
         if (trimmed.startsWith('#') || trimmed.startsWith(';')) return;
 
         if (!trimmed) {
-            if (Object.keys(current).length > 2 || current.transform.length > 0) {
+            if ((Object.keys(current).length > 2 || current.transform.length > 0) && current.command !== 'push') {
                 objects.push(current);
                 current = { transform: [], _lineStart: lineNumber + 1 };
             }
@@ -140,8 +203,10 @@ function parseSceneINI(text) {
 
         const [keyRaw, ...rest] = trimmed.split('=');
         if (!keyRaw || rest.length === 0) {
-            errors.push(`Syntaxfehler in Zeile ${lineNumber}: fehlendes '='`);
-            return;
+            if (keyRaw !== 'group' && keyRaw !== 'end') {
+                errors.push(`Syntaxfehler in Zeile ${lineNumber}: fehlendes '='`);
+                return;
+            }
         }
 
         const key = keyRaw.trim();
@@ -151,11 +216,15 @@ function parseSceneINI(text) {
         if (value.length === 1) value = value[0];
 
         let t = 0.0;
+        if (key === 'command' && (value === 'push' || value === 'pop')) {
+            objects.push(current);
+            current = { transform: [], _lineStart: lineNumber + 1 };
+        }
         if (key === 'shape') {
             if (value !== 'box' && value !== 'torus' && value !== 'cone' && value !== 'cylinder' && value !== 'sphere' && value !== 'plane' && value !== 'grid') {
                 errors.push(`Ungültige Form (shape) in Zeile ${lineNumber}: "${value}". Gültige Werte sind: box, torus, cone, cylinder, sphere, plane, grid.`);
             }
-            if (Object.keys(current).length > 2 || current.transform.length > 0) {
+            if ((Object.keys(current).length > 2 || current.transform.length > 0)) {
                 objects.push(current);
                 current = { transform: [], _lineStart: lineNumber + 1 };
             }
@@ -259,7 +328,6 @@ function preload() {
 
 function setup() {
     createCanvas(windowWidth, windowHeight, WEBGL);
-    // perspective(PI / 2, windowWidth / windowHeight, 0.001, 5000);
     anaglyph = createAnaglyph(this);
     camera = new OrbitCamera();
     // camera = new FlyCamera();
@@ -286,7 +354,6 @@ function drawGrid(pg) {
 
 function scene(pg) {
     camera.apply(pg);
-    // pg.scale(1, -1, 1);
     renderScene(pg);
 }
 
@@ -298,6 +365,20 @@ function renderScene(pg) {
     let t = millis() / 1000;
     for (let entry of sceneDescription) {
         try {
+            if (entry.command === 'push') {
+                pg.push();
+                for (let tr of entry.transform ?? []) {
+                    if (tr.type === 'move') {
+                        pg.translate(eval(tr.value[0]), eval(tr.value[1]), eval(tr.value[2]));
+                    } else if (tr.type === 'rotate') {
+                        pg.rotateX(eval(tr.value[0]) / 180 * Math.PI);
+                        pg.rotateY(eval(tr.value[1]) / 180 * Math.PI);
+                        pg.rotateZ(eval(tr.value[2]) / 180 * Math.PI);
+                    } else if (tr.type === 'scale') {
+                        pg.scale(eval(tr.value[0]), eval(tr.value[1]), eval(tr.value[2]));
+                    }
+                }
+            }
             if (entry.background) {
                 pg.background(eval(entry.background) * 255);
                 continue;
@@ -382,6 +463,9 @@ function renderScene(pg) {
                         pg.model(entry.model);
                     }
                 }
+                pg.pop();
+            }
+            if (entry.command === 'pop') {
                 pg.pop();
             }
         } catch (error) {
