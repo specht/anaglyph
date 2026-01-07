@@ -296,7 +296,9 @@ function parseSceneINI(text) {
 }
 
 function preload() {
-    fetch('scene.ini')
+    const params = new URLSearchParams(window.location.search);
+    const sceneFile = params.get('scene') || 'scene.ini';
+    fetch(sceneFile)
     .then(response => response.text())
     .then(text => {
         x = parseSceneINI(text);
@@ -324,7 +326,7 @@ function preload() {
             document.getElementById('errors').innerHTML = errors.map(e => `<p>${e}</p>`).join('');
         }
     })
-    .catch(error => console.error('Fehler in scene.ini!', error));
+    .catch(error => console.error(`Fehler in ${sceneFile}!`, error));
 };
 
 function setup() {
