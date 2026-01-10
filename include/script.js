@@ -532,6 +532,11 @@ function isValidColor(str) {
 }
 
 window.addEventListener('DOMContentLoaded', function(e) {
+    const params = new URLSearchParams(window.location.search);
+    const sceneFile = params.get('scene');
+    if (sceneFile === null)
+        this.window.location.search = `?scene=scene.ini`;
+
     document.querySelector('#bu-anaglyph').addEventListener('click', function(e) {
         enableAnaglyph = !enableAnaglyph;
         anaglyph.shaderLoaded = enableAnaglyph;
