@@ -3,8 +3,6 @@ let camera;
 let models = {};
 let tex = {};
 let sceneDescription;
-let enableAnaglyph = true;
-let enableAxes = false;
 let firstFrame = true;
 
 function preprocessSceneINI(source) {
@@ -406,7 +404,7 @@ function drawAxes(pg) {
 function renderScene(pg) {
     pg.background(255);
 
-    if (enableAxes) {
+    if (camera.enableAxes) {
         drawAxes(pg);
     }
 
@@ -475,10 +473,10 @@ function renderScene(pg) {
             }
             if (entry.anaglyph) {
                 if (firstFrame) {
-                    enableAnaglyph = (entry.anaglyph === 'on');
-                    anaglyph.shaderLoaded = enableAnaglyph;
+                    camera.enableAnaglyph = (entry.anaglyph === 'on');
                 }
             }
+            anaglyph.shaderLoaded = camera.enableAnaglyph;
             if (entry.shape || entry.model) {
                 pg.push();
                 for (let tr of entry.transform ?? []) {
@@ -538,10 +536,10 @@ window.addEventListener('DOMContentLoaded', function(e) {
         this.window.location.search = `?scene=scene.ini`;
 
     document.querySelector('#bu-anaglyph').addEventListener('click', function(e) {
-        enableAnaglyph = !enableAnaglyph;
-        anaglyph.shaderLoaded = enableAnaglyph;
+        camera.enableAnaglyph = !camera.enableAnaglyph;
+        anaglyph.shaderLoaded = camera.enableAnaglyph;
     });
     document.querySelector('#bu-axes').addEventListener('click', function(e) {
-        enableAxes = !enableAxes;
+        camera.enableAxes = !camera.enableAxes;
     });
 });
