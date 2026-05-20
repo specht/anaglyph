@@ -412,6 +412,7 @@ function renderScene(pg) {
     pg.stroke(0);
     pg.fill(255);
     let t = millis() / 1000;
+    if (typeof(sceneDescription) === 'undefined') return;
     for (let entry of sceneDescription) {
         try {
             if (entry.command === 'push') {
