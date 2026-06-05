@@ -904,6 +904,7 @@ function createTeapotGeometry(detail = DEFAULT_TEAPOT_DETAIL) {
         }
 
         const row = detail + 1;
+        const patchFlip = patchNeedsFlip(patch, detail, rawVertices, base);
 
         for (let uStep = 0; uStep < detail; uStep++) {
             for (let vStep = 0; vStep < detail; vStep++) {
@@ -912,8 +913,13 @@ function createTeapotGeometry(detail = DEFAULT_TEAPOT_DETAIL) {
                 const c = base + (uStep + 1) * row + (vStep + 1);
                 const d = base + uStep * row + (vStep + 1);
 
-                faces.push([a, b, c]);
-                faces.push([a, c, d]);
+                if (patchFlip) {
+                    faces.push([a, c, b]);
+                    faces.push([a, d, c]);
+                } else {
+                    faces.push([a, b, c]);
+                    faces.push([a, c, d]);
+                }
             }
         }
     }
@@ -931,19 +937,34 @@ function createTeapotGeometry(detail = DEFAULT_TEAPOT_DETAIL) {
     );
     const scale = maxDimension > 0 ? 100 / maxDimension : 1;
 
-    for (const p of rawVertices) {
-        geometry.vertices.push(createVector(
-            (p.x - center.x) * scale,
-            (p.y - center.y) * scale,
-            (p.z - center.z) * scale
-        ));
+    const normalizedVertices = rawVertices.map(p => ({
+        x: (p.x - center.x) * scale,
+        y: (p.y - center.y) * scale,
+        z: (p.z - center.z) * scale
+    }));
+
+    // Different Bézier patches touch each other along shared edges, but if each
+    // patch keeps its own copy of the seam vertices, p5 computes normals per patch
+    // and visible shading seams appear. Weld coincident vertices first so normals
+    // are averaged smoothly across patch boundaries.
+    const welded = weldVertices(normalizedVertices, 1e-4);
+
+    for (const p of welded.vertices) {
+        geometry.vertices.push(createVector(p.x, p.y, p.z));
     }
 
-    // Reflections can invert the winding of individual patches. Flip any face
-    // whose normal points roughly toward the center, so lighting works reliably.
     for (const face of faces) {
-        const fixedFace = facePointsOutward(face, geometry.vertices) ? face : [face[0], face[2], face[1]];
-        geometry.faces.push(fixedFace);
+        const remapped = [
+            welded.remap[face[0]],
+            welded.remap[face[1]],
+            welded.remap[face[2]]
+        ];
+
+        if (remapped[0] === remapped[1] || remapped[1] === remapped[2] || remapped[0] === remapped[2]) {
+            continue;
+        }
+
+        geometry.faces.push(remapped);
     }
 
     geometry.computeNormals();
@@ -991,7 +1012,8 @@ function teapotPatchFromIndices(patchIndex, mirrorMode) {
             if (mirrorMode === 'mirrorX' || mirrorMode === 'mirrorXY') x = -x;
 
             // The original data uses z as the vertical axis. The scene system uses y.
-            patchRow.push({ x, y: -z, z: y });
+            // Keep z positive as positive y so the teapot stands upright in this scene.
+            patchRow.push({ x, y: z, z: y });
         }
 
         patch.push(patchRow);
@@ -1027,6 +1049,75 @@ function bernstein3(t) {
     ];
 }
 
+
+function patchNeedsFlip(patch, detail, rawVertices, base) {
+    const u = 0.5;
+    const v = 0.5;
+    const deriv = evaluateBezierPatchDerivatives(patch, u, v);
+    const surfaceNormal = cross3(deriv.du, deriv.dv);
+
+    const row = detail + 1;
+    const midU = Math.max(0, Math.min(detail - 1, Math.floor(detail / 2)));
+    const midV = Math.max(0, Math.min(detail - 1, Math.floor(detail / 2)));
+    const a = rawVertices[base + midU * row + midV];
+    const b = rawVertices[base + (midU + 1) * row + midV];
+    const c = rawVertices[base + (midU + 1) * row + (midV + 1)];
+    const triNormal = cross3(sub3(b, a), sub3(c, a));
+
+    return dot3(surfaceNormal, triNormal) < 0;
+}
+
+function evaluateBezierPatchDerivatives(patch, u, v) {
+    const bu = bernstein3(u);
+    const bv = bernstein3(v);
+    const dbu = bernstein3Derivative(u);
+    const dbv = bernstein3Derivative(v);
+    const du = { x: 0, y: 0, z: 0 };
+    const dv = { x: 0, y: 0, z: 0 };
+
+    for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 4; j++) {
+            const p = patch[i][j];
+            const wu = dbu[i] * bv[j];
+            const wv = bu[i] * dbv[j];
+            du.x += p.x * wu;
+            du.y += p.y * wu;
+            du.z += p.z * wu;
+            dv.x += p.x * wv;
+            dv.y += p.y * wv;
+            dv.z += p.z * wv;
+        }
+    }
+
+    return { du, dv };
+}
+
+function bernstein3Derivative(t) {
+    const omt = 1 - t;
+    return [
+        -3 * omt * omt,
+        3 * omt * omt - 6 * omt * t,
+        6 * omt * t - 3 * t * t,
+        3 * t * t
+    ];
+}
+
+function sub3(a, b) {
+    return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+
+function cross3(a, b) {
+    return {
+        x: a.y * b.z - a.z * b.y,
+        y: a.z * b.x - a.x * b.z,
+        z: a.x * b.y - a.y * b.x
+    };
+}
+
+function dot3(a, b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
 function boundsForPoints(points) {
     const bounds = {
         minX: Infinity, maxX: -Infinity,
@@ -1044,6 +1135,33 @@ function boundsForPoints(points) {
     }
 
     return bounds;
+}
+
+function weldVertices(vertices, epsilon = 1e-4) {
+    const map = new Map();
+    const unique = [];
+    const remap = new Array(vertices.length);
+    const inv = 1 / epsilon;
+
+    for (let i = 0; i < vertices.length; i++) {
+        const p = vertices[i];
+        const key = [
+            Math.round(p.x * inv),
+            Math.round(p.y * inv),
+            Math.round(p.z * inv)
+        ].join(',');
+
+        let index = map.get(key);
+        if (index === undefined) {
+            index = unique.length;
+            unique.push(p);
+            map.set(key, index);
+        }
+
+        remap[i] = index;
+    }
+
+    return { vertices: unique, remap };
 }
 
 function facePointsOutward(face, vertices) {
