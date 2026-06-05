@@ -9,10 +9,12 @@ let firstFrame = true;
 const DEFAULT_TEXT_FONT = 'OpenSans';
 const DEFAULT_TEXT_FONT_PATH = 'include/OpenSans-Regular.ttf';
 const DEFAULT_TEXT_DETAIL = 8;
+const DEFAULT_TEAPOT_DETAIL = 8;
 
 let fontBytes = {};
 let textFonts = {};
 let extrudedTextCache = new Map();
+let teapotGeometryCache = new Map();
 let shownRuntimeErrors = new Set();
 
 function preprocessSceneINI(source) {
@@ -254,8 +256,8 @@ function parseSceneINI(text) {
         }
 
         if (key === 'shape') {
-            if (value !== 'box' && value !== 'torus' && value !== 'cone' && value !== 'cylinder' && value !== 'sphere' && value !== 'plane' && value !== 'grid') {
-                errors.push(`Ungültige Form (shape) in Zeile ${lineNumber}: "${value}". Gültige Werte sind: box, torus, cone, cylinder, sphere, plane, grid.`);
+            if (value !== 'box' && value !== 'torus' && value !== 'cone' && value !== 'cylinder' && value !== 'sphere' && value !== 'plane' && value !== 'grid' && value !== 'teapot') {
+                errors.push(`Ungültige Form (shape) in Zeile ${lineNumber}: "${value}". Gültige Werte sind: box, torus, cone, cylinder, sphere, plane, grid, teapot.`);
             }
             pushCurrentAndStartNew(lineNumber);
         }
@@ -865,6 +867,281 @@ function distanceSquared(a, b) {
     return dx * dx + dy * dy;
 }
 
+
+function renderTeapot(pg, entry, t) {
+    const detail = entry.detail
+        ? Math.max(2, Math.min(32, Math.round(evalSceneValue(entry.detail, t))))
+        : DEFAULT_TEAPOT_DETAIL;
+
+    const cacheKey = `teapot-${detail}`;
+    let geometry = teapotGeometryCache.get(cacheKey);
+
+    if (!geometry) {
+        geometry = createTeapotGeometry(detail);
+        geometry.gid = cacheKey;
+        teapotGeometryCache.set(cacheKey, geometry);
+    }
+
+    pg.model(geometry);
+}
+
+function createTeapotGeometry(detail = DEFAULT_TEAPOT_DETAIL) {
+    const geometry = new p5.Geometry();
+    const patches = createTeapotPatches();
+    const rawVertices = [];
+    const faces = [];
+
+    for (const patch of patches) {
+        const base = rawVertices.length;
+
+        for (let uStep = 0; uStep <= detail; uStep++) {
+            const u = uStep / detail;
+
+            for (let vStep = 0; vStep <= detail; vStep++) {
+                const v = vStep / detail;
+                rawVertices.push(evaluateBezierPatch(patch, u, v));
+            }
+        }
+
+        const row = detail + 1;
+
+        for (let uStep = 0; uStep < detail; uStep++) {
+            for (let vStep = 0; vStep < detail; vStep++) {
+                const a = base + uStep * row + vStep;
+                const b = base + (uStep + 1) * row + vStep;
+                const c = base + (uStep + 1) * row + (vStep + 1);
+                const d = base + uStep * row + (vStep + 1);
+
+                faces.push([a, b, c]);
+                faces.push([a, c, d]);
+            }
+        }
+    }
+
+    const bounds = boundsForPoints(rawVertices);
+    const center = {
+        x: (bounds.minX + bounds.maxX) / 2,
+        y: (bounds.minY + bounds.maxY) / 2,
+        z: (bounds.minZ + bounds.maxZ) / 2
+    };
+    const maxDimension = Math.max(
+        bounds.maxX - bounds.minX,
+        bounds.maxY - bounds.minY,
+        bounds.maxZ - bounds.minZ
+    );
+    const scale = maxDimension > 0 ? 100 / maxDimension : 1;
+
+    for (const p of rawVertices) {
+        geometry.vertices.push(createVector(
+            (p.x - center.x) * scale,
+            (p.y - center.y) * scale,
+            (p.z - center.z) * scale
+        ));
+    }
+
+    // Reflections can invert the winding of individual patches. Flip any face
+    // whose normal points roughly toward the center, so lighting works reliably.
+    for (const face of faces) {
+        const fixedFace = facePointsOutward(face, geometry.vertices) ? face : [face[0], face[2], face[1]];
+        geometry.faces.push(fixedFace);
+    }
+
+    geometry.computeNormals();
+    return geometry;
+}
+
+function createTeapotPatches() {
+    const patches = [];
+
+    for (let i = 0; i < TEAPOT_PATCH_DATA.length; i++) {
+        patches.push(teapotPatchFromIndices(i, 'none'));
+        patches.push(teapotPatchFromIndices(i, 'mirrorY'));
+
+        // Rim, body, lid, and bottom are mirrored in both x and y.
+        // Handle and spout are only mirrored across y.
+        if (i < 6) {
+            patches.push(teapotPatchFromIndices(i, 'mirrorX'));
+            patches.push(teapotPatchFromIndices(i, 'mirrorXY'));
+        }
+    }
+
+    return patches;
+}
+
+function teapotPatchFromIndices(patchIndex, mirrorMode) {
+    const indices = TEAPOT_PATCH_DATA[patchIndex];
+    const patch = [];
+
+    for (let row = 0; row < 4; row++) {
+        const patchRow = [];
+
+        for (let col = 0; col < 4; col++) {
+            let sourceCol = col;
+
+            if (mirrorMode === 'mirrorY' || mirrorMode === 'mirrorX') {
+                sourceCol = 3 - col;
+            }
+
+            const source = TEAPOT_CONTROL_POINTS[indices[row * 4 + sourceCol]];
+            let x = source[0];
+            let y = source[1];
+            let z = source[2];
+
+            if (mirrorMode === 'mirrorY' || mirrorMode === 'mirrorXY') y = -y;
+            if (mirrorMode === 'mirrorX' || mirrorMode === 'mirrorXY') x = -x;
+
+            // The original data uses z as the vertical axis. The scene system uses y.
+            patchRow.push({ x, y: -z, z: y });
+        }
+
+        patch.push(patchRow);
+    }
+
+    return patch;
+}
+
+function evaluateBezierPatch(patch, u, v) {
+    const bu = bernstein3(u);
+    const bv = bernstein3(v);
+    const p = { x: 0, y: 0, z: 0 };
+
+    for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 4; j++) {
+            const weight = bu[i] * bv[j];
+            p.x += patch[i][j].x * weight;
+            p.y += patch[i][j].y * weight;
+            p.z += patch[i][j].z * weight;
+        }
+    }
+
+    return p;
+}
+
+function bernstein3(t) {
+    const mt = 1 - t;
+    return [
+        mt * mt * mt,
+        3 * t * mt * mt,
+        3 * t * t * mt,
+        t * t * t
+    ];
+}
+
+function boundsForPoints(points) {
+    const bounds = {
+        minX: Infinity, maxX: -Infinity,
+        minY: Infinity, maxY: -Infinity,
+        minZ: Infinity, maxZ: -Infinity
+    };
+
+    for (const p of points) {
+        bounds.minX = Math.min(bounds.minX, p.x);
+        bounds.maxX = Math.max(bounds.maxX, p.x);
+        bounds.minY = Math.min(bounds.minY, p.y);
+        bounds.maxY = Math.max(bounds.maxY, p.y);
+        bounds.minZ = Math.min(bounds.minZ, p.z);
+        bounds.maxZ = Math.max(bounds.maxZ, p.z);
+    }
+
+    return bounds;
+}
+
+function facePointsOutward(face, vertices) {
+    const a = vertices[face[0]];
+    const b = vertices[face[1]];
+    const c = vertices[face[2]];
+
+    const ux = b.x - a.x;
+    const uy = b.y - a.y;
+    const uz = b.z - a.z;
+    const vx = c.x - a.x;
+    const vy = c.y - a.y;
+    const vz = c.z - a.z;
+
+    const nx = uy * vz - uz * vy;
+    const ny = uz * vx - ux * vz;
+    const nz = ux * vy - uy * vx;
+
+    const cx = (a.x + b.x + c.x) / 3;
+    const cy = (a.y + b.y + c.y) / 3;
+    const cz = (a.z + b.z + c.z) / 3;
+
+    return nx * cx + ny * cy + nz * cz >= 0;
+}
+
+/*
+ * Utah teapot patch/control-point data adapted from the classic GLUT/freeglut
+ * teapot. Keep the attribution if you copy this data elsewhere.
+ *
+ * freeglut_teapot_data.h copyright notice:
+ * Copyright (c) 1999-2000 Pawel W. Olszta. All Rights Reserved.
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do
+ * so, subject to the following conditions: The above copyright notice and this
+ * permission notice shall be included in all copies or substantial portions of
+ * the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+ *
+ * Original GLUT teapot code copyright notice:
+ * (c) Copyright 1993, Silicon Graphics, Inc. ALL RIGHTS RESERVED.
+ * Permission to use, copy, modify, and distribute this software for any purpose
+ * and without fee is hereby granted, provided that the above copyright notice
+ * appear in all copies and that both the copyright notice and this permission
+ * notice appear in supporting documentation, and that the name of Silicon
+ * Graphics, Inc. not be used in advertising or publicity pertaining to
+ * distribution of the software without specific, written prior permission.
+ * THE MATERIAL EMBODIED ON THIS SOFTWARE IS PROVIDED TO YOU "AS-IS" AND WITHOUT
+ * WARRANTY OF ANY KIND.
+ */
+const TEAPOT_PATCH_DATA = [
+    [102, 103, 104, 105, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
+    [24, 25, 26, 27, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
+    [96, 96, 96, 96, 97, 98, 99, 100, 101, 101, 101, 101, 0, 1, 2, 3],
+    [0, 1, 2, 3, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117],
+    [118, 118, 118, 118, 124, 122, 119, 121, 123, 126, 125, 120, 40, 39, 38, 37],
+    [41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56],
+    [53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 28, 65, 66, 67],
+    [68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83],
+    [80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95]
+];
+
+const TEAPOT_CONTROL_POINTS = [
+    [0.2, 0, 2.7], [0.2, -0.112, 2.7], [0.112, -0.2, 2.7], [0, -0.2, 2.7],
+    [1.3375, 0, 2.53125], [1.3375, -0.749, 2.53125], [0.749, -1.3375, 2.53125], [0, -1.3375, 2.53125],
+    [1.4375, 0, 2.53125], [1.4375, -0.805, 2.53125], [0.805, -1.4375, 2.53125], [0, -1.4375, 2.53125],
+    [1.5, 0, 2.4], [1.5, -0.84, 2.4], [0.84, -1.5, 2.4], [0, -1.5, 2.4],
+    [1.75, 0, 1.875], [1.75, -0.98, 1.875], [0.98, -1.75, 1.875], [0, -1.75, 1.875],
+    [2, 0, 1.35], [2, -1.12, 1.35], [1.12, -2, 1.35], [0, -2, 1.35],
+    [2, 0, 0.9], [2, -1.12, 0.9], [1.12, -2, 0.9], [0, -2, 0.9],
+    [-2, 0, 0.9], [2, 0, 0.45], [2, -1.12, 0.45], [1.12, -2, 0.45], [0, -2, 0.45],
+    [1.5, 0, 0.225], [1.5, -0.84, 0.225], [0.84, -1.5, 0.225], [0, -1.5, 0.225],
+    [1.5, 0, 0.15], [1.5, -0.84, 0.15], [0.84, -1.5, 0.15], [0, -1.5, 0.15],
+    [-1.6, 0, 2.025], [-1.6, -0.3, 2.025], [-1.5, -0.3, 2.25], [-1.5, 0, 2.25],
+    [-2.3, 0, 2.025], [-2.3, -0.3, 2.025], [-2.5, -0.3, 2.25], [-2.5, 0, 2.25],
+    [-2.7, 0, 2.025], [-2.7, -0.3, 2.025], [-3, -0.3, 2.25], [-3, 0, 2.25],
+    [-2.7, 0, 1.8], [-2.7, -0.3, 1.8], [-3, -0.3, 1.8], [-3, 0, 1.8],
+    [-2.7, 0, 1.575], [-2.7, -0.3, 1.575], [-3, -0.3, 1.35], [-3, 0, 1.35],
+    [-2.5, 0, 1.125], [-2.5, -0.3, 1.125], [-2.65, -0.3, 0.9375], [-2.65, 0, 0.9375],
+    [-2, -0.3, 0.9], [-1.9, -0.3, 0.6], [-1.9, 0, 0.6],
+    [1.7, 0, 1.425], [1.7, -0.66, 1.425], [1.7, -0.66, 0.6], [1.7, 0, 0.6],
+    [2.6, 0, 1.425], [2.6, -0.66, 1.425], [3.1, -0.66, 0.825], [3.1, 0, 0.825],
+    [2.3, 0, 2.1], [2.3, -0.25, 2.1], [2.4, -0.25, 2.025], [2.4, 0, 2.025],
+    [2.7, 0, 2.4], [2.7, -0.25, 2.4], [3.3, -0.25, 2.4], [3.3, 0, 2.4],
+    [2.8, 0, 2.475], [2.8, -0.25, 2.475], [3.525, -0.25, 2.49375], [3.525, 0, 2.49375],
+    [2.9, 0, 2.475], [2.9, -0.15, 2.475], [3.45, -0.15, 2.5125], [3.45, 0, 2.5125],
+    [2.8, 0, 2.4], [2.8, -0.15, 2.4], [3.2, -0.15, 2.4], [3.2, 0, 2.4],
+    [0, 0, 3.15], [0.8, 0, 3.15], [0.8, -0.45, 3.15], [0.45, -0.8, 3.15], [0, -0.8, 3.15],
+    [0, 0, 2.85], [1.4, 0, 2.4], [1.4, -0.784, 2.4], [0.784, -1.4, 2.4], [0, -1.4, 2.4],
+    [0.4, 0, 2.55], [0.4, -0.224, 2.55], [0.224, -0.4, 2.55], [0, -0.4, 2.55],
+    [1.3, 0, 2.55], [1.3, -0.728, 2.55], [0.728, -1.3, 2.55], [0, -1.3, 2.55],
+    [1.3, 0, 2.4], [1.3, -0.728, 2.4], [0.728, -1.3, 2.4], [0, -1.3, 2.4],
+    [0, 0, 0], [1.425, -0.798, 0], [1.5, 0, 0.075], [1.425, 0, 0],
+    [0.798, -1.425, 0], [0, -1.5, 0.075], [0, -1.425, 0], [1.5, -0.84, 0.075], [0.84, -1.5, 0.075]
+];
+
 function renderScene(pg) {
     pg.background(255);
 
@@ -960,6 +1237,8 @@ function renderScene(pg) {
                     pg.plane(100);
                 } else if (entry.shape === 'grid') {
                     drawGrid(pg);
+                } else if (entry.shape === 'teapot') {
+                    renderTeapot(pg, entry, t);
                 }
 
                 if (entry.model) {
