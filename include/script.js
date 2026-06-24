@@ -17,22 +17,165 @@ let extrudedTextCache = new Map();
 let teapotGeometryCache = new Map();
 let shownRuntimeErrors = new Set();
 
+const BUILTIN_SHAPES = new Set([
+    'box',
+    'sphere',
+    'cylinder',
+    'cone',
+    'torus',
+    'teapot',
+    'plane',
+    'grid'
+]);
+
 function preprocessSceneINI(source) {
     const errors = [];
-    const lineMap = []; // maps expanded line index -> original line number (1-based)
+    const definitions = Object.create(null);
 
-    function expand(lines, parentLine = 0, scope = {}) {
+    const IDENT = `[A-Za-z_][A-Za-z0-9_-]*`;
+    const DEFINE_RE = new RegExp(`^define\\s+(${IDENT})\\s*$`);
+    const LOOP_RE = /^loop\s+(\w+)\s+from\s+(-?\d+)\s+to\s+(-?\d+)(?:\s+step\s+(-?\d+))?\s*$/;
+
+    function normalizeAssignment(trimmed) {
+        let line = trimmed;
+
+        if (!line.includes('=') && line.includes(' ')) {
+            const firstSpace = line.indexOf(' ');
+            line = line.slice(0, firstSpace) + '=' + line.slice(firstSpace + 1);
+        }
+
+        const eq = line.indexOf('=');
+        if (eq < 0) return null;
+
+        return {
+            key: line.slice(0, eq).trim(),
+            value: line.slice(eq + 1).trim()
+        };
+    }
+
+    function getShapeName(trimmed) {
+        const assignment = normalizeAssignment(trimmed);
+        if (!assignment) return null;
+        if (assignment.key !== 'shape') return null;
+        return assignment.value;
+    }
+
+    function isLoopStart(trimmed) {
+        return LOOP_RE.test(trimmed);
+    }
+
+    function isGroupStart(trimmed) {
+        return trimmed === 'group';
+    }
+
+    function isDefineStart(trimmed) {
+        return DEFINE_RE.test(trimmed);
+    }
+
+    function isBlockStart(trimmed) {
+        return isLoopStart(trimmed) || isGroupStart(trimmed) || isDefineStart(trimmed);
+    }
+
+    function isCustomShapeContinuationBoundary(trimmed) {
+        if (trimmed === '') return true;
+        if (trimmed === 'end') return true;
+        if (isLoopStart(trimmed)) return true;
+        if (isGroupStart(trimmed)) return true;
+        if (isDefineStart(trimmed)) return true;
+
+        const assignment = normalizeAssignment(trimmed);
+        if (!assignment) return false;
+
+        return assignment.key === 'shape' ||
+            assignment.key === 'model' ||
+            assignment.key === 'text' ||
+            assignment.key === 'command';
+    }
+
+    function substituteLoopVariables(line, scope) {
+        return line.replace(/\b\w+\b/g, word =>
+            scope[word] !== undefined ? scope[word] : word
+        );
+    }
+
+    function collectDefinitions(lines) {
+        const mainLines = [];
+        let i = 0;
+
+        while (i < lines.length) {
+            const line = lines[i];
+            const trimmed = line.text.trim();
+            const defineMatch = trimmed.match(DEFINE_RE);
+
+            if (!defineMatch) {
+                mainLines.push(line);
+                i++;
+                continue;
+            }
+
+            const name = defineMatch[1];
+
+            if (BUILTIN_SHAPES.has(name)) {
+                errors.push(`Ungültige Definition in Zeile ${line.number}: "${name}" ist bereits eine eingebaute Form.`);
+            }
+
+            if (definitions[name]) {
+                errors.push(`Doppelte Definition in Zeile ${line.number}: "${name}" wurde bereits definiert.`);
+            }
+
+            const body = [];
+            let depth = 1;
+            i++;
+
+            while (i < lines.length && depth > 0) {
+                const innerLine = lines[i];
+                const innerTrimmed = innerLine.text.trim();
+
+                if (isBlockStart(innerTrimmed)) {
+                    if (isDefineStart(innerTrimmed)) {
+                        errors.push(`Definitionen dürfen nicht verschachtelt werden (Zeile ${innerLine.number}).`);
+                    }
+                    depth++;
+                } else if (innerTrimmed === 'end') {
+                    depth--;
+                }
+
+                if (depth > 0) {
+                    body.push(innerLine);
+                }
+
+                i++;
+            }
+
+            if (depth !== 0) {
+                errors.push(`Fehlendes Schlüsselwort 'end' für Definition "${name}" ab Zeile ${line.number}`);
+                continue;
+            }
+
+            if (!BUILTIN_SHAPES.has(name) && !definitions[name]) {
+                definitions[name] = {
+                    name,
+                    line: line.number,
+                    body
+                };
+            }
+        }
+
+        return mainLines;
+    }
+
+    function expand(lines, scope = {}, callStack = []) {
         const result = [];
-        const map = [];
         let i = 0;
         const stack = [];
 
         while (i < lines.length) {
-            const rawLine = lines[i];
+            const rawLine = lines[i].text;
             const trimmed = rawLine.trim();
-            const lineNumber = parentLine + i;
+            const lineNumber = lines[i].number;
 
-            const loopMatch = trimmed.match(/^loop\s+(\w+)\s+from\s+(-?\d+)\s+to\s+(-?\d+)(?:\s+step\s+(-?\d+))?/);
+            const loopMatch = trimmed.match(LOOP_RE);
+
             if (loopMatch) {
                 const [, varName, fromStr, toStr, stepStr] = loopMatch;
                 const from = parseInt(fromStr, 10);
@@ -40,67 +183,141 @@ function preprocessSceneINI(source) {
                 const step = stepStr ? parseInt(stepStr, 10) : (to >= from ? 1 : -1);
 
                 if (step === 0) {
-                    errors.push(`Ungültige Schrittgröße (step) 0 in Zeile ${lineNumber + 1}`);
+                    errors.push(`Ungültige Schrittgröße (step) 0 in Zeile ${lineNumber}`);
                     i++;
                     continue;
                 }
 
-                let body = [];
+                const body = [];
                 let depth = 1;
-                let startLine = i + 1;
                 i++;
 
                 while (i < lines.length && depth > 0) {
-                    const innerLine = lines[i].trim();
-                    if (innerLine.startsWith('loop') || innerLine.startsWith('group')) depth++;
-                    else if (innerLine === 'end') depth--;
-                    if (depth > 0) body.push(lines[i]);
+                    const innerLine = lines[i];
+                    const innerTrimmed = innerLine.text.trim();
+
+                    if (isLoopStart(innerTrimmed) || isGroupStart(innerTrimmed)) {
+                        depth++;
+                    } else if (innerTrimmed === 'end') {
+                        depth--;
+                    }
+
+                    if (depth > 0) {
+                        body.push(innerLine);
+                    }
+
                     i++;
                 }
 
                 if (depth !== 0) {
-                    errors.push(`Fehlendes Schlüsselwort 'end' für Schleife (loop) ab Zeile ${lineNumber + 1}`);
+                    errors.push(`Fehlendes Schlüsselwort 'end' für Schleife (loop) ab Zeile ${lineNumber}`);
                     continue;
                 }
 
                 for (let val = from; step > 0 ? val <= to : val >= to; val += step) {
                     const newScope = { ...scope, [varName]: val };
-                    const { expanded, map: innerMap } = expand(body, parentLine + startLine, newScope);
-                    result.push(...expanded);
-                    map.push(...innerMap);
+                    result.push(...expand(body, newScope, callStack));
                 }
+
+                continue;
+            }
+
+            const shapeName = getShapeName(trimmed);
+
+            if (shapeName && definitions[shapeName]) {
+                const instanceLine = lines[i];
+                const instanceLines = [];
+                i++;
+
+                while (i < lines.length) {
+                    const nextTrimmed = lines[i].text.trim();
+
+                    if (isCustomShapeContinuationBoundary(nextTrimmed)) {
+                        break;
+                    }
+
+                    instanceLines.push(lines[i]);
+                    i++;
+                }
+
+                if (callStack.includes(shapeName)) {
+                    errors.push(
+                        `Rekursive Definition in Zeile ${instanceLine.number}: ` +
+                        `${[...callStack, shapeName].join(' → ')}`
+                    );
+                    continue;
+                }
+
+                const indent = rawLine.match(/^\s*/)?.[0] ?? '';
+
+                result.push({
+                    text: `${indent}command = push`,
+                    number: instanceLine.number
+                });
+
+                for (const instancePart of instanceLines) {
+                    result.push({
+                        text: substituteLoopVariables(instancePart.text, scope),
+                        number: instancePart.number
+                    });
+                }
+
+                result.push(
+                    ...expand(
+                        definitions[shapeName].body,
+                        scope,
+                        [...callStack, shapeName]
+                    )
+                );
+
+                result.push({
+                    text: `${indent}command = pop`,
+                    number: instanceLine.number
+                });
+
                 continue;
             }
 
             if (trimmed === 'group') {
                 const indent = rawLine.match(/^\s*/)?.[0] ?? '';
-                result.push(`${indent}command = push`);
-                map.push(lineNumber + 1);
-                stack.push(lineNumber + 1); // track for error reporting
+
+                result.push({
+                    text: `${indent}command = push`,
+                    number: lineNumber
+                });
+
+                stack.push(lineNumber);
                 i++;
                 continue;
             }
 
             if (trimmed === 'end') {
                 const indent = rawLine.match(/^\s*/)?.[0] ?? '';
+
                 if (stack.length === 0) {
-                    errors.push(`Überzähliges Schlüsselwort 'end' in Zeile ${lineNumber + 1}`);
-                    result.push(rawLine); // preserve for better debugging
+                    errors.push(`Überzähliges Schlüsselwort 'end' in Zeile ${lineNumber}`);
+                    result.push({
+                        text: rawLine,
+                        number: lineNumber
+                    });
                 } else {
                     stack.pop();
-                    result.push(`${indent}command = pop`);
+
+                    result.push({
+                        text: `${indent}command = pop`,
+                        number: lineNumber
+                    });
                 }
-                map.push(lineNumber + 1);
+
                 i++;
                 continue;
             }
 
-            // Substitute loop variables
-            const substituted = rawLine.replace(/\b\w+\b/g, word =>
-                scope[word] !== undefined ? scope[word] : word
-            );
-            result.push(substituted);
-            map.push(lineNumber + 1);
+            result.push({
+                text: substituteLoopVariables(rawLine, scope),
+                number: lineNumber
+            });
+
             i++;
         }
 
@@ -110,15 +327,23 @@ function preprocessSceneINI(source) {
             }
         }
 
-        return { expanded: result, map };
+        return result;
     }
 
-    const lines = source.split(/\r?\n/);
-    const { expanded, map } = expand(lines);
+    const numberedLines = source
+        .split(/\r?\n/)
+        .map((text, index) => ({
+            text,
+            number: index + 1
+        }));
+
+    const mainLines = collectDefinitions(numberedLines);
+    const expandedLines = expand(mainLines);
+
     return {
-        output: expanded.join('\n'),
+        output: expandedLines.map(line => line.text).join('\n'),
         errors,
-        lineMap: map
+        lineMap: expandedLines.map(line => line.number)
     };
 }
 
@@ -256,9 +481,13 @@ function parseSceneINI(text) {
         }
 
         if (key === 'shape') {
-            if (value !== 'box' && value !== 'torus' && value !== 'cone' && value !== 'cylinder' && value !== 'sphere' && value !== 'plane' && value !== 'grid' && value !== 'teapot') {
-                errors.push(`Ungültige Form (shape) in Zeile ${lineNumber}: "${value}". Gültige Werte sind: box, torus, cone, cylinder, sphere, plane, grid, teapot.`);
+            if (!BUILTIN_SHAPES.has(value)) {
+                errors.push(
+                    `Ungültige Form (shape) in Zeile ${lineNumber}: "${value}". ` +
+                    `Gültige Werte sind: ${[...BUILTIN_SHAPES].join(', ')}.`
+                );
             }
+
             pushCurrentAndStartNew(lineNumber);
         }
 
