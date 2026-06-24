@@ -331,16 +331,39 @@ function parseSceneINI(text) {
     return { objects, errors };
 }
 
+function normalizeSceneFileName(name) {
+    let file = (name || '').trim();
+
+    if (file === '') {
+        file = 'scene.ini';
+    }
+
+    file = file.replace(/\\/g, '/');
+    file = file.replace(/[?#].*$/, '');
+    file = file.replace(/^\/+/, '');
+
+    if (!file.toLowerCase().endsWith('.ini')) {
+        file += '.ini';
+    }
+
+    return file;
+}
+
 function preload() {
     window.anaglyph_fonts = {};
     window.anaglyph_fonts.OpenSans = loadFont(DEFAULT_TEXT_FONT_PATH);
     fontBytes.OpenSans = loadBytes(DEFAULT_TEXT_FONT_PATH);
 
     const params = new URLSearchParams(window.location.search);
-    const sceneFile = params.get('scene') || 'scene.ini';
+    const sceneFile = normalizeSceneFileName(params.get('scene') || 'scene.ini');
 
     fetch(sceneFile)
-    .then(response => response.text())
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`not-found`);
+        }
+        return response.text();
+    })
     .then(text => {
         const x = parseSceneINI(text);
         sceneDescription = x.objects;
@@ -1428,20 +1451,38 @@ window.addEventListener('DOMContentLoaded', function(e) {
     const sceneInput = document.querySelector('#scene-file');
     const sceneLoader = document.querySelector('#scene-loader');
 
+    function loadSceneFromInput() {
+        const nextSceneFile = normalizeSceneFileName(sceneInput.value);
+
+        const nextParams = new URLSearchParams(window.location.search);
+        nextParams.set('scene', nextSceneFile);
+
+        window.location.search = `?${nextParams.toString()}`;
+    }
+
     if (sceneInput) {
         sceneInput.value = sceneFile;
+
+        sceneInput.addEventListener('focus', function() {
+            setTimeout(() => sceneInput.select(), 0);
+        });
+
+        sceneInput.addEventListener('click', function() {
+            setTimeout(() => sceneInput.select(), 0);
+        });
+
+        sceneInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                loadSceneFromInput();
+            }
+        });
     }
 
     if (sceneLoader) {
         sceneLoader.addEventListener('submit', function(e) {
             e.preventDefault();
-
-            const nextSceneFile = normalizeSceneFileName(sceneInput.value);
-
-            const nextParams = new URLSearchParams(window.location.search);
-            nextParams.set('scene', nextSceneFile);
-
-            window.location.search = nextParams.toString();
+            loadSceneFromInput();
         });
     }
 
