@@ -59,3 +59,17 @@ p {
     border: 0.1em solid rgba(0, 0, 0, 0.4);
     box-shadow: 0 0 0.2em rgba(0, 0, 0, 0.1);
 }
+
+#scene-loader {
+    display: inline-flex;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+#scene-file {
+    height: 2.2em;
+    padding: 0 0.6em;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    min-width: 14em;
+}

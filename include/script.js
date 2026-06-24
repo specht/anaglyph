@@ -372,7 +372,11 @@ function preload() {
             document.getElementById('errors').innerHTML = errors.map(e => `<p>${e}</p>`).join('');
         }
     })
-    .catch(error => console.error(`Fehler in ${sceneFile}!`, error));
+    .catch(error => {
+        sceneDescription = [];
+        reportRuntimeError(`Die Szene "${sceneFile}" konnte nicht geladen werden. Prüfe, ob die Datei existiert und richtig geschrieben ist.`);
+        console.error(`Fehler in ${sceneFile}!`, error);
+    });
 }
 
 function setup() {
@@ -1395,11 +1399,51 @@ function isValidColor(str) {
     return s.color !== '';
 }
 
+function normalizeSceneFileName(name) {
+    let file = (name || '').trim();
+
+    if (file === '') {
+        file = 'scene.ini';
+    }
+
+    file = file.replace(/\\/g, '/');
+    file = file.replace(/^\/+/, '');
+
+    if (!file.toLowerCase().endsWith('.ini')) {
+        file += '.ini';
+    }
+
+    return file;
+}
+
 window.addEventListener('DOMContentLoaded', function(e) {
     const params = new URLSearchParams(window.location.search);
-    const sceneFile = params.get('scene');
-    if (sceneFile === null)
-        this.window.location.search = `?scene=scene.ini`;
+    const sceneFile = normalizeSceneFileName(params.get('scene') || 'scene.ini');
+
+    if (params.get('scene') === null) {
+        params.set('scene', sceneFile);
+        window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+    }
+
+    const sceneInput = document.querySelector('#scene-file');
+    const sceneLoader = document.querySelector('#scene-loader');
+
+    if (sceneInput) {
+        sceneInput.value = sceneFile;
+    }
+
+    if (sceneLoader) {
+        sceneLoader.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const nextSceneFile = normalizeSceneFileName(sceneInput.value);
+
+            const nextParams = new URLSearchParams(window.location.search);
+            nextParams.set('scene', nextSceneFile);
+
+            window.location.search = nextParams.toString();
+        });
+    }
 
     document.querySelector('#bu-anaglyph').addEventListener('click', function(e) {
         camera.enableAnaglyph = !camera.enableAnaglyph;
