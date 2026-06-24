@@ -1310,7 +1310,6 @@ function renderScene(pg) {
 
             if (entry.background) {
                 pg.background(eval(entry.background) * 255);
-                continue;
             }
 
             if (entry.strokeWeight) {
