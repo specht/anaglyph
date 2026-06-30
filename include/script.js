@@ -509,31 +509,21 @@ function parseSceneINI(text) {
             }
         }
 
+        if (key === 'background') {
+            if (!isValidSceneColorValue(value)) {
+                errors.push(`Ungültiger Wert für Hintergrundfarbe (background) in Zeile ${lineNumber}: "${Array.isArray(value) ? value.join(', ') : value}".`);
+            }
+        }
+
         if (key === 'fill') {
-            if (value !== 'off' && value !== 'shade') {
-                try {
-                    try {
-                        eval(value);
-                    } catch (e) {
-                        if (!isValidColor(value)) throw "nope";
-                    }
-                } catch (e) {
-                    errors.push(`Ungültiger Wert für Füllfarbe (fill) in Zeile ${lineNumber}: "${value}".`);
-                }
+            if (value !== 'off' && value !== 'shade' && !isValidSceneColorValue(value)) {
+                errors.push(`Ungültiger Wert für Füllfarbe (fill) in Zeile ${lineNumber}: "${Array.isArray(value) ? value.join(', ') : value}".`);
             }
         }
 
         if (key === 'stroke') {
-            if (value !== 'off') {
-                try {
-                    try {
-                        eval(value);
-                    } catch (e) {
-                        if (!isValidColor(value)) throw "nope";
-                    }
-                } catch (e) {
-                    errors.push(`Ungültiger Wert für Strichfarbe (stroke) in Zeile ${lineNumber}: "${value}".`);
-                }
+            if (value !== 'off' && !isValidSceneColorValue(value)) {
+                errors.push(`Ungültiger Wert für Strichfarbe (stroke) in Zeile ${lineNumber}: "${Array.isArray(value) ? value.join(', ') : value}".`);
             }
         }
 
@@ -1538,7 +1528,7 @@ function renderScene(pg) {
             }
 
             if (entry.background) {
-                pg.background(eval(entry.background) * 255);
+                applySceneColor(pg, 'background', entry.background, t);
             }
 
             if (entry.strokeWeight) {
@@ -1549,11 +1539,7 @@ function renderScene(pg) {
                 if (entry.stroke === 'off') {
                     pg.noStroke();
                 } else {
-                    try {
-                        pg.stroke(eval(entry.stroke) * 255);
-                    } catch (e) {
-                        pg.stroke(entry.stroke);
-                    }
+                    applySceneColor(pg, 'stroke', entry.stroke, t);
                 }
             }
 
@@ -1566,11 +1552,7 @@ function renderScene(pg) {
                     pg.directionalLight(255, 255, 255, 0.5, 0.5, -1);
                     pg.fill(255);
                 } else {
-                    try {
-                        pg.fill(eval(entry.fill) * 255);
-                    } catch (e) {
-                        pg.fill(entry.fill);
-                    }
+                    applySceneColor(pg, 'fill', entry.fill, t);
                 }
             }
 
@@ -1644,7 +1626,43 @@ function renderScene(pg) {
     firstFrame = false;
 }
 
+function isValidSceneColorValue(value) {
+    if (Array.isArray(value)) {
+        return value.every(part => canEvaluateSceneExpression(part));
+    }
+
+    return isValidColor(value) || canEvaluateSceneExpression(value);
+}
+
+function canEvaluateSceneExpression(expression) {
+    try {
+        evalSceneValue(expression, 0);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function applySceneColor(pg, method, value, t) {
+    const args = sceneColorArgs(value, t);
+    pg[method](...args);
+}
+
+function sceneColorArgs(value, t) {
+    if (Array.isArray(value)) {
+        return value.map(part => evalSceneValue(part, t) * 255);
+    }
+
+    if (isValidColor(value)) {
+        return [value];
+    }
+
+    return [evalSceneValue(value, t) * 255];
+}
+
 function isValidColor(str) {
+    if (typeof str !== 'string') return false;
+
     const s = new Option().style;
     s.color = str;
     return s.color !== '';
