@@ -88,7 +88,7 @@ class OrbitCamera {
         this.hashUpdateTimeout = setTimeout(() => {
             let json = this.getCameraStateJSON();
             let base64 = btoa(json);
-            location.hash = base64;
+            history.replaceState(history.state, '', `${location.pathname}${location.search}#${base64}`);
         }, 300);
     }
 
