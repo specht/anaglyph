@@ -417,6 +417,7 @@ function parseSceneINI(text) {
 
     const objects = [];
     let current = { transform: [], _lineStart: 1 };
+    let sceneCamera = null;
 
     function currentHasContent() {
         const keys = Object.keys(current).filter(key => key !== 'transform' && key !== '_lineStart');
@@ -471,6 +472,19 @@ function parseSceneINI(text) {
         } else {
             value = splitArgs(rawValue);
             if (value.length === 1) value = value[0];
+        }
+
+        // camera = ROT_X, ROT_Y, DISTANCE[, CENTER_X, CENTER_Y, CENTER_Z]: the
+        // view the scene starts with, as »Kamera kopieren« writes it.
+        if (key === 'camera') {
+            const numbers = (Array.isArray(value) ? value : [value]).map(Number);
+            if (![3, 6].includes(numbers.length) || numbers.some(n => !Number.isFinite(n))) {
+                errors.push(`Ungültiger Wert für die Kamera (camera) in Zeile ${lineNumber}: "${rawValue}". Erwartet werden drei oder sechs Zahlen, zum Beispiel: camera = 20, 20, -300, 0, 0, 0`);
+            } else {
+                const [rotX, rotY, distance, cx = 0, cy = 0, cz = 0] = numbers;
+                sceneCamera = { rotX, rotY, distance, cx, cy, cz, line: rawValue };
+            }
+            return;
         }
 
         if (key === 'command' && (value === 'push' || value === 'pop')) {
@@ -547,7 +561,7 @@ function parseSceneINI(text) {
         obj.transform.reverse();
     });
 
-    return { objects, errors };
+    return { objects, errors, camera: sceneCamera };
 }
 
 function normalizeSceneFileName(name) {
@@ -586,6 +600,9 @@ function preload() {
     .then(text => {
         const x = parseSceneINI(text);
         sceneDescription = x.objects;
+        sceneCamera = x.camera;
+        sceneCameraKey = `anaglyph-scene-camera:${sceneFile}`;
+        pictureScene = sceneFile;
 
         for (let entry of sceneDescription) {
             if (entry.model) {
@@ -593,14 +610,16 @@ function preload() {
                     let path = entry.model;
                     if (path.indexOf('.') < 0)
                         path = path + '.obj';
-                    models[entry.model] = loadModel(path, false);
+                    pendingAssets += 1;
+                    models[entry.model] = loadModel(path, false, assetDone, assetDone);
                 }
 
                 let kit = entry.model.split('/')[0];
                 let model = entry.model.split('/')[1].split('.')[0];
 
                 if (!tex[kit]) {
-                    tex[kit] = loadImage(`${kit}/textures/${model}.png`);
+                    pendingAssets += 1;
+                    tex[kit] = loadImage(`${kit}/textures/${model}.png`, assetDone, assetDone);
                 }
 
                 entry.model = models[entry.model];
@@ -619,6 +638,53 @@ function preload() {
         reportRuntimeError(`Die Szene "${sceneFile}" konnte nicht geladen werden. Prüfe, ob die Datei existiert und richtig geschrieben ist.`);
         console.error(`Fehler in ${sceneFile}!`, error);
     });
+}
+
+// The scene's own view (camera = … in the scene file). It applies when the
+// page has no view of its own in the URL, and whenever the camera line
+// changed since this tab last applied it: a view the reader turned to stays
+// across reloads, but editing the line always shows the new view.
+let sceneCamera = null;
+let sceneCameraKey = null;
+
+// ?abgabe: a handed-in scene on the Workspace site, from its own camera
+// line, light and without anaglyph, whatever this tab was set to. The
+// camera and the view buttons stay, for showing it to the class;
+// ?abgabe&bild is the picture alone, for previews and the gallery grid.
+const SUBMISSION_PREVIEW = new URLSearchParams(window.location.search).has('abgabe');
+const SUBMISSION_PICTURE = SUBMISSION_PREVIEW && new URLSearchParams(window.location.search).has('bild');
+
+function applySceneCameraOnLoad() {
+    if (!sceneCamera) return;
+    if (SUBMISSION_PREVIEW) {
+        camera.setView(sceneCamera, true);
+        return;
+    }
+    let lastLine = null;
+    try {
+        lastLine = sessionStorage.getItem(sceneCameraKey);
+        sessionStorage.setItem(sceneCameraKey, sceneCamera.line);
+    } catch (e) {
+        // Without storage, the view from the URL wins.
+    }
+    if (!camera.restoredFromHash || lastLine !== sceneCamera.line) {
+        camera.setView(sceneCamera, true);
+    }
+}
+
+// The current view as a scene line, in whole numbers: degrees for the two
+// rotations, scene units for the distance and the center.
+function sceneCameraLine() {
+    const angle = (value) => {
+        let d = Math.round(degrees(value)) % 360;
+        if (d > 180) d -= 360;
+        if (d <= -180) d += 360;
+        return d;
+    };
+    const center = camera.targetCenter;
+    return `camera = ${angle(camera.targetRotationX)}, ${angle(camera.targetRotationY)}, ` +
+        `${Math.round(camera.targetDistance)}, ${Math.round(center.x)}, ` +
+        `${Math.round(center.y)}, ${Math.round(center.z)}`;
 }
 
 function setup() {
@@ -650,6 +716,33 @@ function windowResized() {
 
 function draw() {
     anaglyph.draw(scene);
+    if (SUBMISSION_PICTURE) sendPictureWhenReady();
+}
+
+// ?abgabe&bild: once the scene, its models and textures are there and a few
+// frames are drawn, the picture goes to the page around this one (the class
+// gallery on the Workspace site), which shows it instead of a live viewer.
+let pendingAssets = 0;
+let pictureScene = null;
+let pictureFrames = 0;
+let pictureSent = false;
+
+function assetDone() {
+    pendingAssets -= 1;
+}
+
+function sendPictureWhenReady() {
+    if (pictureSent || typeof sceneDescription === 'undefined' || pendingAssets > 0) return;
+    pictureFrames += 1;
+    if (pictureFrames < 10) return;
+    pictureSent = true;
+    const errors = document.getElementById('errors');
+    window.parent.postMessage({
+        type: 'anaglyph-picture',
+        scene: pictureScene,
+        picture: document.querySelector('canvas').toDataURL('image/webp', 0.85),
+        errors: errors.style.display === 'block' ? errors.textContent.trim() : '',
+    }, window.location.origin);
 }
 
 // Colors a scene starts with: dark gray on white, or light gray on dark gray
@@ -686,7 +779,7 @@ function drawAxes(pg) {
     pg.textFont(window.anaglyph_fonts.OpenSans, 10);
 
     pg.push();
-    pg.strokeWeight(5);
+    pg.strokeWeight(5 * viewScale());
     pg.stroke('#d5291a');
     pg.line(0, 0, 0, 100, 0, 0);
     pg.translate(110, 0, 0);
@@ -697,7 +790,7 @@ function drawAxes(pg) {
     pg.pop();
 
     pg.push();
-    pg.strokeWeight(5);
+    pg.strokeWeight(5 * viewScale());
     pg.stroke('#4aa03f');
     pg.line(0, 0, 0, 0, 100, 0);
     pg.translate(0, 110, 0);
@@ -708,7 +801,7 @@ function drawAxes(pg) {
     pg.pop();
 
     pg.push();
-    pg.strokeWeight(5);
+    pg.strokeWeight(5 * viewScale());
     pg.stroke('#0d60ae');
     pg.line(0, 0, 0, 0, 0, 100);
     pg.translate(0, 0, 110);
@@ -1528,7 +1621,8 @@ function renderScene(pg) {
         drawAxes(pg);
     }
 
-    pg.strokeWeight(2);
+    // Line widths grow with the window like the scene (viewScale).
+    pg.strokeWeight(2 * viewScale());
     pg.stroke(defaults.stroke);
     pg.fill(defaults.fill);
     // Shading needs a light surface: without a fill of its own, a shaded
@@ -1537,6 +1631,7 @@ function renderScene(pg) {
 
     let t = millis() / 1000;
     if (typeof sceneDescription === 'undefined') return;
+    if (firstFrame) applySceneCameraOnLoad();
 
     for (let entry of sceneDescription) {
         try {
@@ -1550,7 +1645,7 @@ function renderScene(pg) {
             }
 
             if (entry.strokeWeight) {
-                pg.strokeWeight(eval(entry.strokeWeight));
+                pg.strokeWeight(eval(entry.strokeWeight) * viewScale());
             }
 
             if (entry.stroke) {
@@ -1761,6 +1856,34 @@ window.addEventListener('DOMContentLoaded', function(e) {
 
     document.querySelector('#bu-axes').addEventListener('click', function(e) {
         camera.enableAxes = !camera.enableAxes;
+    });
+
+    if (SUBMISSION_PREVIEW) {
+        document.body.classList.add('submission-preview');
+        // The arrow keys and Esc page through the gallery around this view.
+        window.addEventListener('keydown', function(e) {
+            if (['ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key)) {
+                window.parent.postMessage({ type: 'anaglyph-key', key: e.key }, window.location.origin);
+            }
+        });
+    }
+    if (SUBMISSION_PICTURE) {
+        document.body.classList.add('submission-picture');
+    }
+
+    document.querySelector('#bu-copy-camera').addEventListener('click', function(e) {
+        const button = this;
+        const line = sceneCameraLine();
+        const done = () => {
+            button.textContent = 'Kopiert';
+            setTimeout(() => { button.textContent = 'Kamera kopieren'; }, 1500);
+        };
+        const ask = () => window.prompt('Kopiere diese Zeile in deine Szene:', line);
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(line).then(done, ask);
+        } else {
+            ask();
+        }
     });
 
     document.querySelector('#bu-dark').addEventListener('click', function(e) {

@@ -73,3 +73,13 @@ p {
     border-radius: 4px;
     min-width: 14em;
 }
+/* ?abgabe: a handed-in scene, with the view buttons only */
+.submission-preview #bu-copy-camera,
+.submission-preview #scene-loader {
+    display: none;
+}
+
+/* ?abgabe&bild: the picture alone */
+.submission-picture #controls {
+    display: none;
+}

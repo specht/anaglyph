@@ -1,3 +1,14 @@
+// The scene grows with the window: at this canvas height one scene unit is
+// one pixel, in a window half as tall everything is half as big. So a scene
+// and its camera line look the same in a small preview, a full-screen tab
+// and on a projector, only larger or smaller. 950 is about a full-screen
+// browser window on a 1080p display, where scenes looked like this before.
+const VIEW_REFERENCE_HEIGHT = 950;
+
+function viewScale() {
+    return height / VIEW_REFERENCE_HEIGHT;
+}
+
 class OrbitCamera {
     constructor() {
         this.minDistance = -700;
@@ -50,17 +61,35 @@ class OrbitCamera {
         });
     }
 
+    // Back to the scene's own view (camera = … in the scene file), or to
+    // the default one.
     reset() {
         this.rotationX = this.rotationX % (Math.PI * 2.0);
         this.rotationY = this.rotationY % (Math.PI * 2.0);
-        this.targetRotationX = radians(20);
-        this.targetRotationY = radians(20);
-        this.targetDistance = -300;
-        this.targetCenter = createVector(0, 0, 0);
+        const view = (typeof sceneCamera !== 'undefined' && sceneCamera) ||
+            { rotX: 20, rotY: 20, distance: -300, cx: 0, cy: 0, cz: 0 };
+        this.setView(view, false);
+    }
+
+    // view: { rotX, rotY (degrees), distance, cx, cy, cz }. At once, or
+    // with the usual glide towards it.
+    setView(view, immediately) {
+        this.targetRotationX = radians(view.rotX);
+        this.targetRotationY = radians(view.rotY);
+        this.targetDistance = view.distance;
+        this.targetCenter = createVector(view.cx, view.cy, view.cz);
+        if (immediately) {
+            this.rotationX = this.targetRotationX;
+            this.rotationY = this.targetRotationY;
+            this.distance = this.targetDistance;
+            this.center = this.targetCenter.copy();
+        }
     }
 
     restoreCameraStateFromBase64() {
         if (!location.hash) return;
+        // The submission preview shows the scene's own view, never this tab's.
+        if (new URLSearchParams(location.search).has('abgabe')) return;
         try {
             const base64 = location.hash.substring(1);
             const json = decodeURIComponent(atob(base64));
@@ -79,6 +108,7 @@ class OrbitCamera {
                 this.targetRotationY = this.rotationY;
                 this.targetDistance = this.distance;
                 this.targetCenter = this.center.copy();
+                this.restoredFromHash = true;
             }
         } catch (e) {
             console.warn("Failed to restore camera state from hash:", e);
@@ -188,8 +218,8 @@ class OrbitCamera {
 
                 let right = this.getRotatedRightVector();
                 let up = this.getRotatedUpVector();
-                this.targetCenter.add(p5.Vector.mult(right, -dx));
-                this.targetCenter.add(p5.Vector.mult(up, dy));
+                this.targetCenter.add(p5.Vector.mult(right, -dx / viewScale()));
+                this.targetCenter.add(p5.Vector.mult(up, dy / viewScale()));
 
                 this.touchData.lastMidX = midX;
                 this.touchData.lastMidY = midY;
@@ -261,9 +291,10 @@ class OrbitCamera {
         this.lastMouseY = e.clientY;
 
         if (this.shiftPressed) {
+            // Scene units per screen pixel, so the scene follows the mouse.
             let right = this.getRotatedRightVector();
-            this.targetCenter.add(p5.Vector.mult(right, -dx));
-            this.targetCenter.add(p5.Vector.mult(this.getRotatedUpVector(), dy));
+            this.targetCenter.add(p5.Vector.mult(right, -dx / viewScale()));
+            this.targetCenter.add(p5.Vector.mult(this.getRotatedUpVector(), dy / viewScale()));
         } else {
             this.targetRotationY += dx * this.sensitivity;
             this.targetRotationX += dy * this.sensitivity;
@@ -320,7 +351,11 @@ class OrbitCamera {
     apply(pg) {
         this.update();
 
-        pg.scale(1, -1, 1);
+        // Distance and scene grow together with the window (viewScale), and
+        // the viewer's camera stands at a distance proportional to the
+        // window height: the picture keeps its perspective at every size.
+        const s = viewScale();
+        pg.scale(s, -s, s);
         pg.translate(0, 0, -this.distance);
         pg.rotateX(this.rotationX);
         pg.rotateY(this.rotationY);
