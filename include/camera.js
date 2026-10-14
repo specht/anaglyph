@@ -9,6 +9,7 @@ class OrbitCamera {
         this.distance = this.targetDistance;
         this.enableAnaglyph = false;
         this.enableAxes = false;
+        this.enableDark = false;
 
         this.sensitivity = 0.005;
         this.zoomSensitivity = 20;
@@ -64,7 +65,7 @@ class OrbitCamera {
             const base64 = location.hash.substring(1);
             const json = decodeURIComponent(atob(base64));
             const state = JSON.parse(json);
-            if (state.length === 8) {
+            if (state.length === 8 || state.length === 9) {
                 this.rotationX = state[0];
                 this.rotationY = state[1];
                 this.distance = state[2];
@@ -73,6 +74,7 @@ class OrbitCamera {
                 this.center.z = state[5];
                 this.enableAnaglyph = state[6];
                 this.enableAxes = state[7];
+                this.enableDark = state[8] === true;
                 this.targetRotationX = this.rotationX;
                 this.targetRotationY = this.rotationY;
                 this.targetDistance = this.distance;
@@ -279,6 +281,7 @@ class OrbitCamera {
             this.center.z,
             this.enableAnaglyph,
             this.enableAxes,
+            this.enableDark,
         ];
 
         function roundValues(obj) {

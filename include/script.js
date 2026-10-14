@@ -625,6 +625,7 @@ function setup() {
     createCanvas(windowWidth, windowHeight, WEBGL);
     anaglyph = createAnaglyph(this);
     camera = new OrbitCamera();
+    updateDarkButton();
     // camera = new FlyCamera();
 
     if (typeof opentype === 'undefined') {
@@ -651,9 +652,22 @@ function draw() {
     anaglyph.draw(scene);
 }
 
+// Colors a scene starts with: dark gray on white, or light gray on dark gray
+// after a click on »Dunkel«. A scene that sets its own colors keeps them.
+function sceneDefaults() {
+    if (camera.enableDark) {
+        return { background: 30, stroke: 225, fill: 30, grid: 80, label: 225 };
+    }
+    return { background: 255, stroke: 0, fill: 255, grid: 180, label: 0 };
+}
+
+function updateDarkButton() {
+    document.querySelector('#bu-dark').textContent = camera.enableDark ? 'Hell' : 'Dunkel';
+}
+
 function drawGrid(pg) {
     pg.push();
-    pg.stroke(180);
+    pg.stroke(sceneDefaults().grid);
     for (let i = -500; i <= 500; i += 100) {
         pg.line(i, 0, -500, i, 0, 500);
         pg.line(-500, 0, i, 500, 0, i);
@@ -668,7 +682,7 @@ function scene(pg) {
 
 function drawAxes(pg) {
     pg.push();
-    pg.fill(0);
+    pg.fill(sceneDefaults().label);
     pg.textFont(window.anaglyph_fonts.OpenSans, 10);
 
     pg.push();
@@ -1507,15 +1521,19 @@ const TEAPOT_CONTROL_POINTS = [
 ];
 
 function renderScene(pg) {
-    pg.background(255);
+    const defaults = sceneDefaults();
+    pg.background(defaults.background);
 
     if (camera.enableAxes) {
         drawAxes(pg);
     }
 
     pg.strokeWeight(2);
-    pg.stroke(0);
-    pg.fill(255);
+    pg.stroke(defaults.stroke);
+    pg.fill(defaults.fill);
+    // Shading needs a light surface: without a fill of its own, a shaded
+    // object is white, also on a dark background.
+    let ownFill = false;
 
     let t = millis() / 1000;
     if (typeof sceneDescription === 'undefined') return;
@@ -1544,6 +1562,7 @@ function renderScene(pg) {
             }
 
             if (entry.fill) {
+                ownFill = true;
                 if (entry.fill === 'off') {
                     pg.noFill();
                 } else if (entry.fill === 'shade') {
@@ -1558,6 +1577,9 @@ function renderScene(pg) {
 
             if (entry.shade) {
                 pg.noLights();
+                if (!ownFill) {
+                    pg.fill(entry.shade === 'off' ? defaults.fill : 255);
+                }
                 if (entry.shade === 'off') {
                     // no lights
                 } else {
@@ -1739,5 +1761,10 @@ window.addEventListener('DOMContentLoaded', function(e) {
 
     document.querySelector('#bu-axes').addEventListener('click', function(e) {
         camera.enableAxes = !camera.enableAxes;
+    });
+
+    document.querySelector('#bu-dark').addEventListener('click', function(e) {
+        camera.enableDark = !camera.enableDark;
+        updateDarkButton();
     });
 });
