@@ -652,6 +652,11 @@ let sceneCameraKey = null;
 // camera and the view buttons stay, for showing it to the class;
 // ?abgabe&bild is the picture alone, for previews and the gallery grid.
 const SUBMISSION_PREVIEW = new URLSearchParams(window.location.search).has('abgabe');
+// The Workspace runs the viewer sandboxed, on a host of its own: its origin
+// is opaque ("null") and cannot be named as a target, so messages go to the
+// parent with '*' there (the host only lets the site frame it). Anywhere
+// else they stay on the viewer's own origin.
+const PARENT_ORIGIN = window.location.origin === 'null' ? '*' : window.location.origin;
 const SUBMISSION_PICTURE = SUBMISSION_PREVIEW && new URLSearchParams(window.location.search).has('bild');
 
 function applySceneCameraOnLoad() {
@@ -739,10 +744,14 @@ function sendPictureWhenReady() {
     const errors = document.getElementById('errors');
     window.parent.postMessage({
         type: 'anaglyph-picture',
+        // How many objects the scene has, without the grid: the parent
+        // cannot look into a sandboxed frame to count them itself.
+        objects: Array.isArray(sceneDescription) ? sceneDescription.filter((entry) =>
+            (entry.shape || entry.model || entry.text !== undefined) && entry.shape !== 'grid').length : null,
         scene: pictureScene,
         picture: document.querySelector('canvas').toDataURL('image/webp', 0.85),
         errors: errors.style.display === 'block' ? errors.textContent.trim() : '',
-    }, window.location.origin);
+    }, PARENT_ORIGIN);
 }
 
 // Colors a scene starts with: dark gray on white, or light gray on dark gray
@@ -1863,7 +1872,7 @@ window.addEventListener('DOMContentLoaded', function(e) {
         // The arrow keys and Esc page through the gallery around this view.
         window.addEventListener('keydown', function(e) {
             if (['ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key)) {
-                window.parent.postMessage({ type: 'anaglyph-key', key: e.key }, window.location.origin);
+                window.parent.postMessage({ type: 'anaglyph-key', key: e.key }, PARENT_ORIGIN);
             }
         });
     }
