@@ -653,10 +653,11 @@ let sceneCameraKey = null;
 // ?abgabe&bild is the picture alone, for previews and the gallery grid.
 const SUBMISSION_PREVIEW = new URLSearchParams(window.location.search).has('abgabe');
 // The Workspace runs the viewer sandboxed, on a host of its own: its origin
-// is opaque ("null") and cannot be named as a target, so messages go to the
-// parent with '*' there (the host only lets the site frame it). Anywhere
-// else they stay on the viewer's own origin.
-const PARENT_ORIGIN = window.location.origin === 'null' ? '*' : window.location.origin;
+// is opaque and cannot be named as a target, so messages go to the parent
+// with '*' there (the host only lets the site frame it). Anywhere else they
+// stay on the viewer's own origin. window.origin is "null" for an opaque
+// origin; window.location.origin still names the address and is no help.
+const PARENT_ORIGIN = window.origin === 'null' ? '*' : window.location.origin;
 const SUBMISSION_PICTURE = SUBMISSION_PREVIEW && new URLSearchParams(window.location.search).has('bild');
 
 function applySceneCameraOnLoad() {
